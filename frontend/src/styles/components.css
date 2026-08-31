@@ -1,0 +1,70 @@
+/* ============================================================
+   AI 콘텐츠 스튜디오 × Wanted Design System — 컴포넌트 정제 레이어
+   index.css 의 기존 규칙 위에 얹어(후순위 승) 버튼·카드·인풋·배지를
+   Wanted 스펙(섀도·radius·포커스 링·웨이트)으로 통일한다. 토큰은
+   styles/tokens.css. 2D 사무실/아바타는 건드리지 않음(도메인 특화).
+   ============================================================ */
+
+/* ---- 버튼 : Wanted label1 트래킹 + primary 토큰 ------------- */
+.btn { letter-spacing: 0.0145em; transition: background .14s ease, filter .14s ease, border-color .14s ease; }
+.btn.start { background: var(--bg-primary); color: var(--fg-on-color); }
+.btn.start:hover { background: var(--bg-primary-hover); filter: none; }
+.btn.cancel { background: var(--bg-danger); }
+
+/* ---- 카드 : 다크 레이어드 섀도 + radius 토큰 ---------------- */
+.output-card, .wiki-card, .apikey-card, .hist-panel, .llm-card {
+  box-shadow: var(--shadow-1);
+  border-radius: var(--radius-12);
+}
+.output-card.final { box-shadow: var(--shadow-2); }
+.hist-panel { box-shadow: var(--shadow-popover); }
+
+/* ---- 인풋/셀렉트/텍스트에어리어 : 포커스 링은 Wanted violet -- */
+.chat-input input:focus, .chat-input textarea:focus,
+.apikey-field input:focus, .llm-run-select:focus,
+.llm-card input:focus, .llm-card select:focus,
+.emp-field input:focus, .emp-field textarea:focus, .emp-field select:focus,
+.emp-addmember input:focus, .emp-addteam input:focus,
+.emp-edit-area:focus, .emp-skill-add input:focus,
+.calendar-newidea input:focus, .review-inline input:focus,
+.review-body:focus, .review-section > textarea:focus,
+.brain-search:focus, .history:focus {
+  outline: none;
+  border-color: var(--line-focus);
+  box-shadow: 0 0 0 3px rgba(151, 71, 255, 0.28);
+}
+
+/* ---- SVG 아이콘(Ico) : 텍스트 옆 정렬 ----------------------- */
+.ico { display: inline-block; vertical-align: -0.15em; flex: none; }
+button > .ico, .dash-icon > .ico { vertical-align: -0.125em; }
+
+/* ---- 칩/배지 : pill radius 통일 ---------------------------- */
+.chip, .act-chip, .office-ticker-chip, .directed-chip, .apikey-state {
+  border-radius: var(--radius-full);
+}
+
+/* ---- 네비 활성: Wanted 헤더 문법(중성 배경 + 강한 전경) ------
+   브랜드 블루는 CTA(시작 버튼)에만 — 네비에서 색을 빼 위계를 정돈. */
+.viewtoggle button.active { background: var(--bg-neutral-strong); color: var(--fg-neutral-primary); border-color: transparent; }
+
+/* ---- 패널 제목 가중치 통일(Wanted label = 600 SemiBold) -----
+   타임라인·활동·산출물의 역할명/카드 제목이 700 이라 본문 대비 과하게 진하고
+   다른 UI 와 안 어울리던 문제. 600 으로 낮춰 위계는 유지하되 톤을 정돈한다. */
+.msg-who b, .output-head b, .act-actor { font-weight: 600; }
+/* 본문은 약간 차분한 전경색으로(제목=strong / 본문=neutral 위계) */
+.msg-text, .output-body { color: var(--fg-neutral-strong); }
+
+/* ===== 6개 뷰(사무실/그래프/직원/상세/API키/LLM) 타이포 일관성 =====
+   Wanted 타입 스케일에 맞춰 카드 제목·메타·라벨 크기/가중치를 통일한다. */
+/* 카드 제목 → label1 (14px / 600) */
+.apikey-titles b { font-size: 14px; font-weight: 600; }
+/* 직원탭 이름은 사무실/그래프 탭의 직원 이름 크기에 맞춤(그래프 노드 이름 13px과
+   일치). 사장/팀장/팀원 동일 크기(그쪽도 직급 동일). */
+.emp-dir-name    { font-size: 13px; font-weight: 600; }
+/* 작은 메타·부제·필드 라벨 → caption1 (12px), muted 톤 유지 */
+.emp-dir-sub, .apikey-field label, .apikey-state,
+.msg-meta, .output-meta, .output-live, .apikey-cur { font-size: 12px; }
+/* 섹션 라벨/배지 가중치 → Wanted label 600 */
+.emp-dir-team, .apikey-state { font-weight: 600; }
+/* 상세 편집 헤더 → 다른 패널 h2(13px) 와 위계 맞춰 16px */
+.emp-dir-detail h2 { font-size: 16px; font-weight: 700; }

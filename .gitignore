@@ -1,0 +1,30 @@
+node_modules/
+dist/
+.env
+.env.local
+.env.tmp
+.env.*.tmp
+*.tmp
+*.log
+.DS_Store
+.vite/
+.omc/
+.playwright-mcp/
+
+# 런타임 데이터 — 예외 없이 전부 제외.
+# 비밀키·자격증명·미디어·세션뿐 아니라 위키(두뇌)·직원 학습·브랜드 설정까지 포함한다.
+# 이유 ① 고객사가 주입한 내부 자료(agents/*/injected-*.md)가 히스토리에 영구히 남는 것을 막는다
+#       — 이 저장소는 여러 브랜드를 돌리므로 한 히스토리에 여러 고객 자료가 섞인다.
+#      ② 자율런이 매 사이클 위키·메모리를 갱신해 코드 변경이 데이터 변경에 파묻힌다.
+#      ③ 런타임 상태이지 소스가 아니다 — 백업은 git 이 아닌 별도 수단으로 한다.
+# 직원 조직 정의의 원본은 assets/company/ 시드다(data/company.yaml 은 부팅 시 만들어지는 런타임 사본).
+data/
+runs/
+sessions/*/
+
+# 블로그 스킬 Python venv/바이트캐시 (커밋 제외)
+scripts/blog_skills/venv/
+scripts/blog_skills/__pycache__/
+
+# 데스크탑 런처(.app) 로그
+.launcher-logs/

@@ -1,0 +1,177 @@
+/* ============================================================
+   AI 콘텐츠 스튜디오 — Design Tokens (Wanted Design System 적용)
+   출처: Wanted Design System (Community).fig — CC BY 4.0
+   스튜디오는 다크 전용이라 Wanted의 다크 시맨틱 값을 :root 기본으로 둔다.
+   기존 13개 레거시 변수(--bg/--panel/--accent/--pro…)를 Wanted 토큰으로
+   재매핑 → index.css 의 기존 var() 301곳이 자동으로 새 색을 승계한다.
+   ============================================================ */
+
+/* ---- Pretendard (한국어 가독성) — Wanted Sans 디스플레이 보조 ---- */
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard@v1.3.9/dist/web/variable/pretendardvariable-dynamic-subset.css");
+@import url("https://cdn.jsdelivr.net/gh/orioncactus/pretendard-jp@v1.0.0/dist/web/variable/pretendardjpvariable-dynamic-subset.css");
+@import url("https://cdn.jsdelivr.net/gh/wanteddev/wanted-sans@v1.0.3/packages/wanted-sans/fonts/webfonts/variable/complete/WantedSansVariable.min.css");
+
+:root {
+  /* ===== 원자 팔레트 (Wanted) — 필요한 범위만 ===== */
+  --color-blue-70: #81b3fa; --color-blue-60: #5598f8; --color-blue-50: #3385ff;
+  --color-blue-45: #1a78ff; --color-blue-40: #0066ff; --color-blue-30: #005eeb;
+  --color-green-60: #00bf40; --color-green-50: #00a637; --color-green-70: #21cf60;
+  --color-red-60: #ff4242;  --color-red-70: #ff6666;  --color-red-50: #ff1f1f;
+  --color-violet-70: #9747ff; --color-violet-60: #8a3df2;
+  --color-orange-50: #ff6a00; --color-cyan-60: #0098b2; --color-lime-50: #a1c800;
+
+  /* ===== 시맨틱 토큰 (다크 기준) ===== */
+  --bg-base:        #17171a;
+  --bg-base-alt:    #1e1f22;
+  --bg-elevated:    #232427;
+  --bg-neutral:        rgba(255,255,255,0.06);
+  --bg-neutral-strong: rgba(255,255,255,0.12);
+  --bg-primary:        #0066ff;
+  --bg-primary-hover:  #1a78ff;
+  --bg-primary-subtle: rgba(0,102,255,0.16);
+  --bg-success:        #00bf40;
+  --bg-danger:         #ff4242;
+  --bg-inverse:        #ffffff;
+
+  /* 스크롤바 thumb — 다크는 흰색-알파. 라이트에서 검정-알파로 뒤집힌다(index.css 가 var 로 참조). */
+  --scrollbar-thumb:       rgba(255,255,255,0.12);
+  --scrollbar-thumb-hover: rgba(255,255,255,0.22);
+
+  --fg-neutral-primary:     rgba(255,255,255,0.96);
+  --fg-neutral-strong:      rgba(255,255,255,0.88);
+  --fg-neutral:             rgba(255,255,255,0.74);
+  --fg-neutral-alternative: rgba(255,255,255,0.61);
+  --fg-neutral-assistive:   rgba(255,255,255,0.40);
+  --fg-neutral-disable:     rgba(255,255,255,0.16);
+  --fg-on-color:            #ffffff;
+  --fg-primary:             #5598f8;   /* 다크 배경 가독성용으로 blue-60 */
+  --fg-primary-hover:       #81b3fa;
+  --fg-success:             #21cf60;
+  --fg-danger:              #ff6666;
+  --fg-warning:             #ff6a00;
+  --fg-info:                #0098b2;
+
+  --line-neutral:        rgba(255,255,255,0.16);
+  --line-neutral-strong: rgba(255,255,255,0.32);
+  --line-primary:        #0066ff;
+  --line-primary-subtle: rgba(85,152,248,0.45);
+  --line-focus:          #9747ff;
+
+  /* Subtle 상태 배경(다크) — ad-hoc 네이비/그린/레드 틴트 대체.
+     Wanted 라이트의 *-subtle(연한 단색)을 다크에선 저알파 틴트로 재현. */
+  --bg-success-subtle: rgba(0,191,64,0.14);
+  --bg-danger-subtle:  rgba(255,66,66,0.14);
+  --bg-warning-subtle: rgba(255,106,0,0.12);
+  --bg-info-subtle:    rgba(0,152,178,0.14);
+  --bg-violet-subtle:  rgba(151,71,255,0.16);
+
+  /* ===== Shadow ===== */
+  --shadow-1: 0 1px 2px rgba(0,0,0,0.24), 0 1px 3px rgba(0,0,0,0.28);
+  --shadow-2: 0 2px 4px rgba(0,0,0,0.28), 0 4px 8px rgba(0,0,0,0.30);
+  --shadow-3: 0 4px 8px rgba(0,0,0,0.32), 0 8px 16px rgba(0,0,0,0.36);
+  --shadow-4: 0 8px 16px rgba(0,0,0,0.36), 0 16px 32px rgba(0,0,0,0.44);
+  --shadow-popover: 0 4px 16px rgba(0,0,0,0.48);
+
+  /* ===== Radius ===== */
+  --radius-2: 2px; --radius-4: 4px; --radius-6: 6px; --radius-8: 8px;
+  --radius-10: 10px; --radius-12: 12px; --radius-16: 16px; --radius-20: 20px;
+  --radius-24: 24px; --radius-32: 32px; --radius-full: 9999px;
+
+  /* ===== Spacing (4px base) ===== */
+  --space-1: 4px; --space-2: 8px; --space-3: 12px; --space-4: 16px; --space-5: 20px;
+  --space-6: 24px; --space-8: 32px; --space-10: 40px; --space-12: 48px; --space-16: 64px;
+
+  /* ===== Typography ===== */
+  --font-sans: "Pretendard JP", "Pretendard Variable", "Pretendard",
+               -apple-system, BlinkMacSystemFont, "Segoe UI", "Helvetica Neue", Arial, sans-serif;
+  --font-display: "Wanted Sans Variable", "Wanted Sans", var(--font-sans);
+  --font-mono: "SF Mono", "SFMono-Regular", ui-monospace, "JetBrains Mono", Menlo, Consolas, monospace;
+
+  --type-title3-size: 24px;  --type-title3-lh: 32px;  --type-title3-tracking: -0.023em;
+  --type-heading1-size: 22px; --type-heading1-lh: 30px; --type-heading1-tracking: -0.0194em;
+  --type-heading2-size: 20px; --type-heading2-lh: 28px; --type-heading2-tracking: -0.012em;
+  --type-headline1-size: 18px; --type-headline1-lh: 26px; --type-headline1-tracking: -0.002em;
+  --type-body1-size: 16px; --type-body1-lh: 24px; --type-body1-tracking: 0.0057em;
+  --type-body2-size: 15px; --type-body2-lh: 22px; --type-body2-tracking: 0.0096em;
+  --type-label1-size: 14px; --type-label1-lh: 20px; --type-label1-tracking: 0.0145em;
+  --type-label2-size: 13px; --type-label2-lh: 18px; --type-label2-tracking: 0.0194em;
+  --type-caption1-size: 12px; --type-caption1-lh: 16px; --type-caption1-tracking: 0.0252em;
+
+  /* ===== 레거시 변수 → Wanted 토큰 재매핑 =====
+     index.css 의 기존 var() 들이 그대로 새 색을 받는다. */
+  --bg:      var(--bg-base);            /* #17171a */
+  --panel:   var(--bg-elevated);        /* #232427 */
+  --panel2:  var(--bg-base-alt);        /* #1e1f22 */
+  --border:  var(--line-neutral);
+  --text:    var(--fg-neutral-primary);
+  --muted:   var(--fg-neutral-assistive);
+  --accent:  var(--fg-primary);         /* Wanted blue (다크 가독성 blue-60) */
+  --pro:     var(--fg-success);         /* green */
+  --con:     var(--fg-danger);          /* red */
+  --critic:  var(--fg-warning);         /* orange (경고/비평) */
+  --rebut:   var(--color-red-70);       /* light red */
+  --mono:    var(--font-mono);
+}
+
+/* ============================================================
+   라이트 테마 오버라이드 — <html data-theme="light"> 일 때만.
+   시맨틱/원자 토큰만 뒤집으면 레거시 매핑(--bg/--panel/--text…)과
+   index.css 의 var() 301곳이 자동 승계된다. 다크는 기본(:root) 유지 —
+   라이트는 옵트인(theme.ts). 오피스 픽셀아트 씬은 자체 어두운 배경
+   이미지 위라 흰색 오버레이 텍스트가 그대로 유지된다(의도).
+   ============================================================ */
+:root[data-theme="light"] {
+  --bg-base:        #f6f7f9;
+  --bg-base-alt:    #eceef1;
+  --bg-elevated:    #ffffff;
+  --bg-neutral:        rgba(0,0,0,0.045);
+  --bg-neutral-strong: rgba(0,0,0,0.09);
+  --bg-primary:        #0066ff;
+  --bg-primary-hover:  #005eeb;
+  --bg-primary-subtle: rgba(0,102,255,0.10);
+  --bg-inverse:        #17171a;
+
+  --fg-neutral-primary:     rgba(0,0,0,0.90);
+  --fg-neutral-strong:      rgba(0,0,0,0.82);
+  --fg-neutral:             rgba(0,0,0,0.68);
+  --fg-neutral-alternative: rgba(0,0,0,0.55);
+  --fg-neutral-assistive:   rgba(0,0,0,0.42);
+  --fg-neutral-disable:     rgba(0,0,0,0.22);
+  --fg-on-color:            #ffffff;
+  --fg-primary:             #0066ff;   /* 라이트 배경 대비 위해 blue-40 */
+  --fg-primary-hover:       #005eeb;
+  --fg-success:             #00a637;
+  --fg-danger:              #e11d1d;
+  --fg-warning:             #d95f00;
+  --fg-info:                #0087a0;
+
+  --line-neutral:        rgba(0,0,0,0.14);
+  --line-neutral-strong: rgba(0,0,0,0.26);
+  --line-primary-subtle: rgba(0,102,255,0.40);
+
+  /* Subtle 상태 배경(라이트) — 흰 배경 위 연한 단색 틴트. */
+  --bg-success-subtle: rgba(0,166,55,0.12);
+  --bg-danger-subtle:  rgba(225,29,29,0.10);
+  --bg-warning-subtle: rgba(217,95,0,0.12);
+  --bg-info-subtle:    rgba(0,135,160,0.12);
+  --bg-violet-subtle:  rgba(138,61,242,0.12);
+
+  /* 그림자 — 라이트에선 훨씬 옅게(청회색 틴트). */
+  --shadow-1: 0 1px 2px rgba(20,28,45,0.08), 0 1px 3px rgba(20,28,45,0.06);
+  --shadow-2: 0 2px 4px rgba(20,28,45,0.08), 0 4px 8px rgba(20,28,45,0.08);
+  --shadow-3: 0 4px 8px rgba(20,28,45,0.10), 0 8px 16px rgba(20,28,45,0.10);
+  --shadow-4: 0 8px 16px rgba(20,28,45,0.12), 0 16px 32px rgba(20,28,45,0.14);
+  --shadow-popover: 0 4px 16px rgba(20,28,45,0.18);
+
+  --scrollbar-thumb:       rgba(0,0,0,0.20);
+  --scrollbar-thumb-hover: rgba(0,0,0,0.32);
+}
+
+/* 타입 역할 헬퍼 — 필요 시 className 으로 적용 */
+.t-title3    { font-weight: 700; font-size: var(--type-title3-size);    line-height: var(--type-title3-lh);    letter-spacing: var(--type-title3-tracking); }
+.t-heading1  { font-weight: 700; font-size: var(--type-heading1-size);  line-height: var(--type-heading1-lh);  letter-spacing: var(--type-heading1-tracking); }
+.t-heading2  { font-weight: 700; font-size: var(--type-heading2-size);  line-height: var(--type-heading2-lh);  letter-spacing: var(--type-heading2-tracking); }
+.t-headline1 { font-weight: 600; font-size: var(--type-headline1-size); line-height: var(--type-headline1-lh); letter-spacing: var(--type-headline1-tracking); }
+.t-body1     { font-weight: 500; font-size: var(--type-body1-size);     line-height: var(--type-body1-lh);     letter-spacing: var(--type-body1-tracking); }
+.t-label1    { font-weight: 600; font-size: var(--type-label1-size);    line-height: var(--type-label1-lh);    letter-spacing: var(--type-label1-tracking); }
+.t-caption1  { font-weight: 600; font-size: var(--type-caption1-size);  line-height: var(--type-caption1-lh);  letter-spacing: var(--type-caption1-tracking); }

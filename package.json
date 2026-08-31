@@ -1,0 +1,37 @@
+{
+  "name": "ai-contents-studio",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI 콘텐츠 스튜디오 — 멀티에이전트 AI 오피스가 네이버 블로그 콘텐츠를 자율 기획·제작·학습하는 1인 콘텐츠 회사 (Claude 백엔드)",
+  "engines": {
+    "node": ">=20.6"
+  },
+  "scripts": {
+    "dev": "TZ=Asia/Seoul tsx watch src/server/main.ts",
+    "start": "TZ=Asia/Seoul tsx src/server/main.ts",
+    "typecheck": "tsc --noEmit && tsc -p remotion/tsconfig.json",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "dependencies": {
+    "@hono/node-server": "^1.13.7",
+    "@modelcontextprotocol/sdk": "^1.29.0",
+    "@remotion/bundler": "^4.0.485",
+    "@remotion/renderer": "^4.0.485",
+    "hono": "^4.6.14",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "remotion": "^4.0.485",
+    "yaml": "^2.9.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.0",
+    "@types/react": "^19.2.17",
+    "@types/react-dom": "^19.2.3",
+    "tsx": "^4.19.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  }
+}

@@ -1,0 +1,16 @@
+# 표시 이름 매핑(role_id → AI 아바타 이름) — git 비추적(개인정보 분리 관례 유지).
+# 비우면 role 의 title 로 폴백. 오피스 시각화에 캐릭터를 주기 위한 친근한 이름.
+ceo: 한지원
+research_lead: 서다인
+trend_researcher: 오세라
+seo_strategist: 김도현
+reviewer: 정하람
+perf_analyst: 이수민
+content_lead: 문하은
+image_designer: 윤소이
+content_m1: 배도윤
+cardnews_planner: 송하영
+cardnews_designer: 민준호
+shorts_writer: 유하린
+shorts_director: 서준영
+secretary: 자비스
