@@ -3785,7 +3785,7 @@ const stopAutoCycle = startAutoCycle<AutoWork>({
 });
 if (CONFIG.autoCycleMinutes > 0) {
   // eslint-disable-next-line no-console
-  console.log(`[ai-contents-studio] 자율 사이클 활성 — ${CONFIG.autoCycleMinutes}분 주기(유휴 게이트) · 리서치 ${CONFIG.researchCycleHours}h/건 · 블로그 주 ${CONFIG.contentCadencePerWeek}편${CONFIG.autoShortsPerDay ? ` · 쇼츠 일 ${CONFIG.autoShortsPerDay}편` : ''}${CONFIG.autoCardnewsPerDay ? ` · 카드뉴스 일 ${CONFIG.autoCardnewsPerDay}편` : ''}`);
+  console.log(`[biz-contents-creator] 자율 사이클 활성 — ${CONFIG.autoCycleMinutes}분 주기(유휴 게이트) · 리서치 ${CONFIG.researchCycleHours}h/건 · 블로그 주 ${CONFIG.contentCadencePerWeek}편${CONFIG.autoShortsPerDay ? ` · 쇼츠 일 ${CONFIG.autoShortsPerDay}편` : ''}${CONFIG.autoCardnewsPerDay ? ` · 카드뉴스 일 ${CONFIG.autoCardnewsPerDay}편` : ''}`);
 }
 void stopAutoCycle; // 프로세스 생존 동안 유지(unref 타이머라 종료는 막지 않음)
 // 수동 즉시 실행 — 30분 타이머를 기다리지 않고 지금 한 틱(pickAutoWork→launch). 토글 무시, isBusy·재진입 가드는 유지.
@@ -3815,7 +3815,7 @@ for (const t of CONFIG.autorunTimes.split(',').map((s) => s.trim()).filter(Boole
 }
 if (CONFIG.autorunTimes) {
   // eslint-disable-next-line no-console
-  console.log(`[ai-contents-studio] 정각 오토런 — 매일 ${CONFIG.autorunTimes} 즉시 생산 1편씩`);
+  console.log(`[biz-contents-creator] 정각 오토런 — 매일 ${CONFIG.autorunTimes} 즉시 생산 1편씩`);
 }
 
 // 일일 브리핑(옵트인: DAILY_BRIEFING_TIME="HH:MM"). 지정 시각에 다이제스트를 알림 채널로 발송. 빈값=off.
@@ -3829,7 +3829,7 @@ const stopDaily = startDaily({
 });
 if (CONFIG.dailyBriefingTime) {
   // eslint-disable-next-line no-console
-  console.log(`[ai-contents-studio] 일일 브리핑 활성 — ${CONFIG.dailyBriefingTime}${notifyConfigured() ? '' : ' (알림 채널 미설정 — /api-keys 에서 웹훅/텔레그램 설정 필요)'}`);
+  console.log(`[biz-contents-creator] 일일 브리핑 활성 — ${CONFIG.dailyBriefingTime}${notifyConfigured() ? '' : ' (알림 채널 미설정 — /api-keys 에서 웹훅/텔레그램 설정 필요)'}`);
 }
 void stopDaily;
 
@@ -3914,12 +3914,12 @@ const stopPerfSync = startDaily({
 });
 if (CONFIG.performanceSyncTime) {
   // eslint-disable-next-line no-console
-  console.log(`[ai-contents-studio] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
+  console.log(`[biz-contents-creator] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
 }
 // 수요 게이트 상태 1줄(2026-08-26 리뷰 M2) — 켜져 있어도 검색광고 키가 없으면 전량 fail-open 이라
 // 아무 판정도 일어나지 않는다. 그 '조용한 무동작'이 부팅 로그에서 바로 보이게 한다.
 // eslint-disable-next-line no-console
-console.log(`[ai-contents-studio] 수요 게이트 ${CONFIG.topicDemandGate ? 'on' : 'off'} (검색광고 키 ${searchAdEnabled() ? '있음' : '없음'}, 하한 ${CONFIG.topicDemandMinVolume}/월·시즌 ${CONFIG.topicDemandMinSeason})`);
+console.log(`[biz-contents-creator] 수요 게이트 ${CONFIG.topicDemandGate ? 'on' : 'off'} (검색광고 키 ${searchAdEnabled() ? '있음' : '없음'}, 하한 ${CONFIG.topicDemandMinVolume}/월·시즌 ${CONFIG.topicDemandMinSeason})`);
 void stopPerfSync;
 
 // 텔레그램 봇 수신 폴러 — 검토 대기 알림의 발행 버튼(callback)·수정요청 답장 처리.
@@ -4034,7 +4034,7 @@ if (!process.env.VITEST) {
 const port = CONFIG.port;
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
-  console.log(`[ai-contents-studio] http://${CONFIG.host}:${info.port}  (backend=claude)  · React=/ · lite=/lite`);
+  console.log(`[biz-contents-creator] http://${CONFIG.host}:${info.port}  (backend=claude)  · React=/ · lite=/lite`);
 });
 
 // 메타(페이스북) OAuth 콜백 전용 HTTPS 리스너 — 페이스북은 OAuth 리디렉션에 HTTPS 를 강제한다
@@ -4046,11 +4046,11 @@ if (!process.env.VITEST) {
     const cert = fs.readFileSync(path.join(CONFIG.dataDir, 'certs', 'localhost.crt'));
     serve({ fetch: app.fetch, hostname: CONFIG.host, port: META_HTTPS_PORT, createServer: createHttpsServer, serverOptions: { key, cert } }, () => {
       // eslint-disable-next-line no-console
-      console.log(`[ai-contents-studio] https://localhost:${META_HTTPS_PORT}  (메타 OAuth 콜백 전용)`);
+      console.log(`[biz-contents-creator] https://localhost:${META_HTTPS_PORT}  (메타 OAuth 콜백 전용)`);
     });
   } catch {
     // eslint-disable-next-line no-console
-    console.log('[ai-contents-studio] 메타 HTTPS 콜백 미기동 — data/certs/localhost.{key,crt} 없음(메타 연결 시 필요)');
+    console.log('[biz-contents-creator] 메타 HTTPS 콜백 미기동 — data/certs/localhost.{key,crt} 없음(메타 연결 시 필요)');
   }
 }
 

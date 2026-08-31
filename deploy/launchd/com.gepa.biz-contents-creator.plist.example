@@ -4,15 +4,15 @@
 <dict>
   <!-- AI 콘텐츠 스튜디오 상시 서버 — 로그인 시 자동 시작, 죽으면 재기동.
        pnpm dev = tsx watch 라 소스 수정 시 자체 재시작. .env 변경 반영은:
-       launchctl kickstart -k gui/$UID/com.gepa.ai-contents-studio
-       중지: launchctl bootout gui/$UID/com.gepa.ai-contents-studio
+       launchctl kickstart -k gui/$UID/com.gepa.biz-contents-creator
+       중지: launchctl bootout gui/$UID/com.gepa.biz-contents-creator
 
        설치 방법(다른 Mac에서):
        1) 아래 __HOME__ 을 실제 홈 디렉터리 절대경로로, __REPO__ 를 이 저장소의 절대경로로 치환
-          (예: sed "s#__HOME__#$HOME#g; s#__REPO__#$(pwd)#g" deploy/launchd/com.gepa.ai-contents-studio.plist.example > ~/Library/LaunchAgents/com.gepa.ai-contents-studio.plist)
+          (예: sed "s#__HOME__#$HOME#g; s#__REPO__#$(pwd)#g" deploy/launchd/com.gepa.biz-contents-creator.plist.example > ~/Library/LaunchAgents/com.gepa.biz-contents-creator.plist)
        2) pnpm 실제 경로 확인: `which pnpm` — 다르면 ProgramArguments 첫 줄 수정
-       3) launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.gepa.ai-contents-studio.plist -->
-  <key>Label</key><string>com.gepa.ai-contents-studio</string>
+       3) launchctl bootstrap gui/$UID ~/Library/LaunchAgents/com.gepa.biz-contents-creator.plist -->
+  <key>Label</key><string>com.gepa.biz-contents-creator</string>
   <key>ProgramArguments</key>
   <array>
     <string>__HOME__/.npm-global/bin/pnpm</string>
@@ -28,7 +28,7 @@
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>ThrottleInterval</key><integer>10</integer>
-  <key>StandardOutPath</key><string>__HOME__/Library/Logs/ai-contents-studio.log</string>
-  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/ai-contents-studio.log</string>
+  <key>StandardOutPath</key><string>__HOME__/Library/Logs/biz-contents-creator.log</string>
+  <key>StandardErrorPath</key><string>__HOME__/Library/Logs/biz-contents-creator.log</string>
 </dict>
 </plist>

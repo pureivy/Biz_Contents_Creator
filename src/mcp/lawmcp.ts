@@ -26,7 +26,7 @@ async function getClient(): Promise<Client | null> {
   if (_client && _connectedOc === oc) return _client;
   if (_client) { try { await _client.close(); } catch { /* */ } _client = null; }
   try {
-    const client = new Client({ name: 'ai-contents-studio', version: '1.0.0' }, { capabilities: {} });
+    const client = new Client({ name: 'biz-contents-creator', version: '1.0.0' }, { capabilities: {} });
     // 연결에도 타임아웃 — 원격 MCP 서버 무응답 시 connect 가 무한 대기하지 않게(타임아웃 시 미연결로 폴백).
     const connect = client.connect(new StreamableHTTPClientTransport(new URL(`${ENDPOINT}?oc=${encodeURIComponent(oc)}`)));
     const timer = new Promise<never>((_, rej) => {

@@ -1,4 +1,4 @@
-# AI 콘텐츠 스튜디오 (biz_contents_creator)
+# AI 콘텐츠 스튜디오 (biz-contents-creator)
 
 > **Claude Code CLI(구독 인증)를 백엔드로 쓰는 단일 Node/TS 런타임의 멀티에이전트 AI 콘텐츠 스튜디오.** 편집장 + 전문가 팀이 주제를 분해·토론·집필해 **네이버 블로그 → 카드뉴스 → 숏폼(MP4)** 세트를 만들고, 그 지식을 마크다운 위키로 컴파일·유지한다. 브랜드(고객사)별 자료·발행 계정을 격리하며, 유휴 시간에는 스스로 리서치·제작을 이어간다.
 
@@ -96,8 +96,8 @@ RAG가 아니라 에이전트가 직접 유지하는 **마크다운 지식베이
 
 ### 설치
 ```bash
-git clone https://github.com/pureivy/Biz_Contents_Creator.git
-cd Biz_Contents_Creator
+git clone https://github.com/pureivy/Biz_Contents_Creator.git biz-contents-creator
+cd biz-contents-creator
 pnpm install
 # (선택) React 프론트 빌드 — 안 하면 /lite 사용
 cd frontend && pnpm install && pnpm build && cd ..
@@ -331,7 +331,7 @@ idea → research → draft → ready → published → measured → reflected  
 ## 10. 프로젝트 구조
 
 ```
-biz_contents_creator/
+biz-contents-creator/
 ├── package.json              # Node≥20.6·ESM·Hono·tsx·vitest
 ├── scripts/blog_skills/      # 네이버 발행·OpenAI 이미지 Python 스크립트(venv)
 ├── public/index.html         # 경량 자체 SPA(/lite, 빌드 불필요)
