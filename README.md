@@ -12,7 +12,7 @@
 - **구독 강제** — 호출 시 `ANTHROPIC_API_KEY`/`ANTHROPIC_AUTH_TOKEN` 등을 env에서 제거해, 키가 있어도 크레딧 과금 경로로 회귀하지 않는다.
 - **역할 tier 라우팅** — 편집장·통합(heavy)=`claude-opus-4-8`, 전문가/팀원 본작업(standard)=`claude-sonnet-5`, 분해·배정·수렴판정·분류 같은 구조적 단발 호출(micro)=`claude-haiku-4-5`.
 - **마이크로 단발 호출** — 분해/배정/판정/분류는 풀 에이전틱 루프 없이 `microJSON` 1회로 처리.
-- 직원(역할) 시스템 프롬프트·절차·판단기준은 `data/company.yaml`(런타임) / `assets/company/`(시드).
+- 직원(역할) 시스템 프롬프트·절차·판단기준은 `assets/company/`(시드, **커밋 대상**) → `data/company.yaml`(런타임 사본, gitignore). 런타임 사본이 없으면 부팅 시 시드에서 복사되므로(`company-loader.ts`), 역할·프롬프트를 영구히 바꾸려면 시드를 고쳐야 한다.
 
 > 정액 구독이지만 무비용 보험으로 월별 사용량 원장(`data/llm_usage.json`)과 예산 캡(`MONTHLY_BUDGET_USD`, 0=무제한)을 유지한다(`src/llm/cost.ts`).
 
@@ -96,8 +96,8 @@ RAG가 아니라 에이전트가 직접 유지하는 **마크다운 지식베이
 
 ### 설치
 ```bash
-git clone <repo> ai-contents-studio
-cd ai-contents-studio
+git clone https://github.com/pureivy/Biz_Contents_Creator.git
+cd Biz_Contents_Creator
 pnpm install
 # (선택) React 프론트 빌드 — 안 하면 /lite 사용
 cd frontend && pnpm install && pnpm build && cd ..
@@ -109,7 +109,7 @@ pnpm dev          # TZ=Asia/Seoul tsx watch src/server/main.ts (핫리로드)
 # 또는 비-watch
 pnpm start        # TZ=Asia/Seoul tsx src/server/main.ts
 ```
-브라우저에서 **http://127.0.0.1:8787** 접속.
+브라우저에서 **http://127.0.0.1:8790** 접속 — 이 저장소의 `.env` 가 `PORT=8790` 이다(코드 기본값은 8787, `src/config.ts`). 같은 머신에서 다른 인스턴스와 나란히 띄우려고 옮겨 둔 값이므로, 단독으로 쓸 거면 `.env` 의 `PORT` 를 지우면 8787 로 돌아간다.
 - `/` — React 프론트(빌드돼 있으면)
 - `/lite` — 빌드 불필요 경량 UI
 
@@ -168,7 +168,7 @@ pnpm start        # TZ=Asia/Seoul tsx src/server/main.ts
 ### 서버 · LLM(Claude 단일)
 | 변수 | 기본값 | 설명 |
 |---|---|---|
-| `PORT` / `HOST` | `8787` / `127.0.0.1` | 서버 바인딩 |
+| `PORT` / `HOST` | `8787` / `127.0.0.1` | 서버 바인딩. 메타 OAuth 콜백 전용 HTTPS 는 `PORT+1`(`META_HTTPS_PORT` 로 개별 지정 가능). **이 저장소의 `.env` 는 `PORT=8790`** |
 | `CLOUD_MICRO_MODEL` | `claude-haiku-4-5` | micro tier(구조적 단발) 모델 |
 | `CLOUD_STANDARD_MODEL` | `claude-sonnet-5` | standard tier(본문 집필) 모델 |
 | `CLOUD_HEAVY_MODEL` | `claude-opus-4-8` | heavy tier(통합·편집) 모델 |
@@ -337,7 +337,9 @@ ai-contents-studio/
 ├── public/index.html         # 경량 자체 SPA(/lite, 빌드 불필요)
 ├── frontend/                 # React/Vite 프론트(/ 에서 dist 서빙)
 ├── assets/                   # company 시드·HWPX 템플릿
-├── data/                     # 런타임 데이터(GEPA_DATA_DIR) — wiki·sessions·brands·cardnews·shorts (gitignore)
+├── data/                     # 런타임 데이터(GEPA_DATA_DIR) — wiki(두뇌)·agents(직원 학습)·brands·
+│                             #   sessions·cardnews·shorts. **예외 없이 전부 gitignore** — 클론하면
+│                             #   비어 있고, 부팅 시 assets/company 시드에서 조직이 생성된다
 └── src/
     ├── config.ts             # 전역 설정(env)
     ├── server/main.ts        # Hono HTTP + SSE 서버(전 엔드포인트)
