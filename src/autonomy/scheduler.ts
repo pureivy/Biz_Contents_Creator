@@ -20,18 +20,25 @@ import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { trendSignalBlock } from '../analytics/trendSignal';
-import { assessCandidatesDemand, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, demandVerdict, formatDemandLine, normKw, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
+import { assessCandidatesDemand, demandSignalBlock, demandRejectBlock, demandRejectFor, rememberDemandReject, demandVerdict, formatDemandLine, normKw, readDemandSnap, familyVolume, type DemandRow, type DemandVerdict } from '../analytics/topicDemand';
 import { searchAdEnabled } from '../grounding/naver_searchad';
 import { ytNicheBlock } from '../analytics/ytNiche';
 import { ensureSeriesLabels, classifyCandidates, seriesScoresFor, gateForLabels, fillLabelsFromKnown, cooldownSummary } from '../analytics/seriesLedger';
 import { fallbackSeriesLabels } from '../content/seriesCooldown';
 import { seasonalContext } from '../util/solarTerms';
 import { offSeasonSubject, seasonalSubjectBlock, formatMonths } from '../content/seasonalSubjects';
-import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
+import { speciesCoverage, overSpeciesCap, speciesRotationBlock, speciesInText, speciesCapFor, SPECIES_MONTHLY_CAP } from '../content/speciesRotation';
 import { pieceStore } from '../content/pieces';
 import { overThemeCap, themeRotationBlock, THEME_MONTHLY_CAP } from '../content/topicThemes';
 import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import { collectExistingContent, findSimilarContent, saturatedThemes, saturatedThemeMatches } from '../content/novelty';
+import { rankSearchDemand, searchDemandBlock, unconvertedSubjects, normalizeTerm } from '../analytics/ytSearchDemand';
+import { shortsSearchTerms, igReelViews } from '../analytics/shortsPerf';
+import { axisPerformance, axisBlock } from '../analytics/igAxis';
+import { unusedStock, stockBlock, usedSpecies } from '../content/mediaStock';
+import { shortsStore } from '../content/shorts';
+import { listMedia } from '../content/mediaLibrary';
+import { findSpecies } from '../content/species';
 
 export interface AutoCycleDeps<T = string> {
   /** 사이클 주기(ms). ≤0 이면 스케줄러는 no-op. */
@@ -471,6 +478,17 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 그 사이 브랜드가 전환되면 기각 기억을 A 로 읽고 B 에 쓰게 된다(아래 ResearchState 의 slug 고정과 같은 버그).
   const slug = activeBrandSlug() || '';
   const speciesCov = speciesCoverageFor(slug);   // 수종 로테이션(2026-08-27) — 프롬프트 블록·후보 게이트·winners 필터 공용
+  // 수종 월 상한에 수요 가중(2026-09-04 사용자 확정) — 수요 큰 수종은 몇 편 더 허용한다.
+  // 실측 배분이 어긋나 있었다: 수요 22/월 배롱나무에 6편, 검색 1,085회를 물어다 준 수종엔 3편.
+  // 느슨하게만 만든다 — 수요 미상 수종은 종전 상한(2편) 그대로다. 최고 성적이 수요 목록 밖
+  // 수종(하스카프베리)에서 나왔으므로, 낮은 수요로 조이면 그 발견 자체를 막게 된다.
+  const demandRows = (() => {
+    try { return (readDemandSnap(slug || undefined)?.rows ?? []).map((r) => ({ keyword: r.keyword, total: Math.max(r.volume, r.familyMax) })); }
+    catch { return [] as Array<{ keyword: string; total: number }>; }
+  })();
+  const speciesCap = (name: string): number => {
+    try { return speciesCapFor(familyVolume(demandRows, name).max); } catch { return SPECIES_MONTHLY_CAP; }
+  };
   const themeCov = brandThemeCoverage(new Date(), slug);   // 주제 축 로테이션(2026-08-27) — 수종과 직교
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
@@ -487,6 +505,49 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 신규성 가드(사용자 원칙 2026-07-15) — 브랜드의 기존 글·쇼츠·카드뉴스 제목+키워드와 유사 금지.
   // 프롬프트 주입(사전)과 findSimilarContent 사후 검사 이중 방어 — 유사하면 기각 사유를 담아 1회 재시도.
   const existing = collectExistingContent(activeBrandSlug() || undefined);
+  // 실측 유튜브 검색어(2026-09-04 사용자 확정) — 이 채널에서 재현 가능한 성장 축은 검색이다.
+  // 피드가 끊긴 뒤에도 검색만 살아남았고, 평탄선을 넘긴 두 편은 둘 다 검색으로 넘겼다.
+  // 잡음 거르기는 여기서 한다: 수집된 말에는 무관한 트렌드어가 섞인다("감스트 리중딱" 등).
+  // 우리 분야인지는 수종 사전과 브랜드 업종어로 판정한다 — 둘 다 이미 있는 데이터다.
+  const searchBlock = (() => {
+    try {
+      const stems = [...(getBrand()?.compoundStems ?? []), ...seeds];
+      const covered = existing.map((e) => normalizeTerm(`${e.title} ${e.keyword ?? ''}`));
+      const scored = shortsSearchTerms(activeBrandSlug() || undefined);
+      const rows = rankSearchDemand(scored, {
+        // 그 말을 정면으로 다룬 편이 있는가 — 제목·키워드에 그 말이 통째로 들어갔는지로 본다.
+        isCovered: (k) => { const n = normalizeTerm(k); return covered.some((c) => c.includes(n)); },
+        // 우리 분야의 말인가 — 수종 이름이나 업종어를 품고 있으면 우리 것으로 본다.
+        isRelevant: (k) => !!findSpecies(k) || stems.some((t) => t && k.includes(t)),
+        limit: 15,
+      });
+      // 편은 있는데 검색이 0 인 소재 — ①(외부 수요)만으로는 못 보는 '각도 실패' 신호.
+      return searchDemandBlock(rows, { missed: unconvertedSubjects(scored) });
+    } catch { return ''; } // fail-open — 신호 하나 때문에 제안이 멈추면 안 된다
+  })();
+  // 인스타 소재 축 성적(2026-09-04 사용자 확정) — 같은 소재라도 각도로 도달이 갈린다.
+  // 실측 111편: 꽃·개화 중앙 1,362 · 전정 943 … 기타 557(39편, 가장 큰 덩어리이자 최하위권).
+  // "이 소재를 다뤄라"가 아니라 "각도를 이렇게 잡아라"로 쓴다 — 계절과 싸우지 않게.
+  // 실촬영 재고(2026-09-06) — 아직 화면에 안 나간 사장님 촬영본이 있는 수종.
+  // 소진 판정은 clips/user_*.mp4 존재로 본다(배정 시도가 아니라 구워진 것이 근거).
+  const stockBlockStr = (() => {
+    try {
+      const brandSlug = activeBrandSlug() || undefined;
+      const canon = (n: string): string => findSpecies(n)?.name ?? n;
+      const used = usedSpecies(shortsStore().list().filter((x) => !brandSlug || x.brand === brandSlug), {
+        hasUserClip: (id) => {
+          try { return fs.readdirSync(path.join(CONFIG.dataDir, 'shorts', id, 'clips')).some((f) => f.startsWith('user_')); }
+          catch { return false; }
+        },
+        speciesOf: (t) => findSpecies(t)?.name,
+      });
+      return stockBlock(unusedStock(listMedia(brandSlug), used, canon));
+    } catch { return ''; }
+  })();
+  const axisBlockStr = (() => {
+    try { return axisBlock(axisPerformance(igReelViews(activeBrandSlug() || undefined))); }
+    catch { return ''; } // fail-open
+  })();
   const existingLines = existing.slice(0, 30)
     .map((e) => `- (${e.kind}) ${e.title}${e.keyword ? ` [키워드: ${e.keyword}]` : ''}`).join('\n');
   // 다양성 강제(2026-07-23 감사) — 킬스위치 CONTENT_DIVERSITY=off 로 끔. 표면 novelty 가 못 잡는 '소재 쏠림'을
@@ -518,8 +579,11 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 없어 공회전했다. 날짜+절기 한 줄이면 두뇌가 "처서 지나면 가을 식재 준비" 같은 타이밍을 스스로 잡는다.
     `${seasonalContext()}\n\n` +
     (() => { const b = seasonalSubjectBlock(getBrand()?.seasonalSubjects); return b ? `${b}\n\n` : ''; })() +
-    (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov); return b ? `${b}\n\n` : ''; })() +
+    (() => { const b = speciesRotationBlock(getBrand()?.speciesCatalog, speciesCov, speciesCap); return b ? `${b}\n\n` : ''; })() +
     (() => { const b = themeRotationBlock(getBrand()?.topicThemes, themeCov); return b ? `${b}\n\n` : ''; })() +
+    (searchBlock ? `${searchBlock}\n\n` : '') +
+    (axisBlockStr ? `${axisBlockStr}\n\n` : '') +
+    (stockBlockStr ? `${stockBlockStr}\n\n` : '') +
     jargonLine +
     (brand ? `${brand}\n\n` : '') +
     `[팀·업무 범위]\n${teamLines}\n\n` +
@@ -559,7 +623,8 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 후보 8개가 전부 코드 기각으로 날아간다(실측 2026-08-30: 한 라운드 기각 17건 중 대부분이 축 상한,
     // 16축 중 7축 포화 상태에서 생산이 멈춤). 로테이션 블록은 이미 '제안 금지'라 적고 있었지만 서열
     // 선언이 그것을 1군으로 인정하지 않아 지시끼리 사실상 동급이었다.
-    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) **주제 축·수종 상한 도달(제안 금지)** · 계열 쿨다운 금지·실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) 리서치 기회·실검색 연관어·검색 수요 실측(우선 검토) > 3) 성과 계열 확장(참고). 금지가 항상 이긴다.\n`
+    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) **주제 축·수종 상한 도달(제안 금지)** · 계열 쿨다운 금지·실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) **[검색 수요 실측] 표 — 여기서 먼저 고른다(선택의 출발점)** > 3) 리서치 기회·실검색 연관어(보강) > 4) 성과 계열 확장(참고). 금지가 항상 이긴다.\n`
+      + `순서: 먼저 [검색 수요 실측] 표에서 지금 검색되는 키워드를 고르고, 그다음 1군 금지에 걸리는지 확인해 걸리면 표의 다음 행으로 내려가라. 상상으로 주제를 만든 뒤 수요를 맞춰 붙이지 마라 — 그렇게 나온 후보는 대부분 검색량 미달로 버려진다.\n`
       + `상한 도달 축·수종은 아래 어떤 신호(시드·수요 표·연관어·성과 키워드)에 등장하더라도 후보로 내지 마라 — 코드가 기각해 그 자리가 통째로 버려진다. '아직 안 다룬 축'이 있으면 그 축에서 먼저 채워라.\n\n` +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
@@ -574,11 +639,28 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   let rejectNote = '';
   const IDEA_ROUNDS = 2;   // 마지막 라운드 판정(기아 방지 밸브)이 이 숫자에 매달려 있어 상수로 묶는다
   for (let attempt = 0; attempt < IDEA_ROUNDS; attempt++) {
+    // 실패 사유를 삼키지 않는다 — 실사고 2026-08-31 08:55~10:55: 런처 축소 PATH 로 claude CLI 가
+    // ENOENT 였는데 여기서 조용히 null 이 되어, 오토런 틱이 2시간 동안 "처리할 작업 없음"만 남겼다.
+    // 아래 기각 분기들은 모두 사유를 남기는데 이 경로만 예외였던 것이 원인 추적을 막았다.
+    let callError = '';
+    // 출력 상한 2000(실사고 2026-08-31 17:00 정각 슬롯) — 종전 900 은 claudeCli 의 3배 환산(2700)이
+    // 하한 4000 에 눌려 실효 4000 이었고, 그 4000 을 응답이 넘겨 "exceeded the 4000 output token
+    // maximum" 으로 라운드가 통째로 죽었다. 이 프롬프트는 후보 8개를 한국어 제목·키워드·서브니치로
+    // 요구하는 데다 로테이션·쿨다운·수요 블록이 계속 늘어 출력이 커졌다. 2000×3=6000 으로 5할 여유를 준다.
+    // (haiku 는 --effort low 를 안 붙여 기본 effort 로 돌기 때문에 사고 토큰도 이 상한을 함께 쓴다.)
     const o = await microJSON<{ ideas?: unknown }>(
-      micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 900, signal },
-    ).catch(() => null);
+      micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 2000, signal },
+    ).catch((e: unknown) => { callError = e instanceof Error ? e.message : String(e); return null; });
     const cands = normalizeIdeaCandidates(o);
-    if (!cands.length) return null; // 응답 자체가 무효 — 이번 주기 스킵
+    if (!cands.length) {
+      const last = attempt >= IDEA_ROUNDS - 1;
+      console.log(`[auto-cycle] 아이디어 제안 실패 — ${callError || '모델 응답이 후보 0개(형식 불일치)'}`
+        + ` → ${last ? '이번 주기 스킵' : '다음 라운드 재시도'}`);
+      // 종전엔 첫 라운드 실패가 곧 틱 전체 포기였다 — 응답 절단은 매 호출 달라지는 일시적 실패라
+      // 남은 라운드를 써 보지도 않고 버릴 이유가 없다(라운드 수 IDEA_ROUNDS 로 이미 상한이 있다).
+      if (last) return null;
+      continue;
+    }
     // 검색 수요 묶음 조회(2026-08-26) — 라운드당 딱 1회(검색광고 ≤2콜 + 데이터랩 1콜). 후보당 개별
     // 조회는 라운드당 수십 콜이 된다. 킬스위치 off 면 호출 자체를 생략해 비용이 0이다.
     // 검색광고 자격이 없으면(키 미설정) 조회도 로그도 하지 않는다 — '조회 실패'가 아니라 '측정 안 함'이고,
@@ -651,7 +733,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       }
       // 수종 월 상한 게이트(하드, 비용 0, 2026-08-27) — 최근 30일 같은 수종 블로그가 상한이면 어떤 각도든 기각.
       // 유사 폴백보다 앞이라 '다른 시각' 우회도 막힌다(배롱 8편/월 실사고).
-      const capped = overSpeciesCap(`${title} ${keyword ?? ''}`, speciesCov, getBrand()?.speciesCatalog);
+      const capped = overSpeciesCap(`${title} ${keyword ?? ''}`, speciesCov, getBrand()?.speciesCatalog, speciesCap);
       if (capped) {
         console.log(`[auto-cycle] 아이디어 기각(수종 월 상한) — "${title}" (${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})`);
         rejects.push(`"${title}"=수종 월 상한(${capped.name} 최근 30일 ${capped.count}편 — 아직 안 다룬 수종으로)`);

@@ -10,6 +10,8 @@
   "scripts": {
     "dev": "TZ=Asia/Seoul tsx watch src/server/main.ts",
     "start": "TZ=Asia/Seoul tsx src/server/main.ts",
+    "studio": "remotion studio remotion/index.ts",
+    "preview": "tsx scripts/preview_shorts.ts",
     "typecheck": "tsc --noEmit && tsc -p remotion/tsconfig.json",
     "test": "vitest run",
     "test:watch": "vitest"
@@ -17,16 +19,24 @@
   "dependencies": {
     "@hono/node-server": "^1.13.7",
     "@modelcontextprotocol/sdk": "^1.29.0",
-    "@remotion/bundler": "^4.0.485",
-    "@remotion/renderer": "^4.0.485",
+    "@remotion/bundler": "^4.0.520",
+    "@remotion/effects": "4.0.520",
+    "@remotion/layout-utils": "4.0.520",
+    "@remotion/media": "4.0.520",
+    "@remotion/noise": "4.0.520",
+    "@remotion/paths": "4.0.520",
+    "@remotion/renderer": "^4.0.520",
+    "@remotion/shapes": "4.0.520",
+    "@remotion/transitions": "4.0.520",
     "hono": "^4.6.14",
     "react": "^19.2.7",
     "react-dom": "^19.2.7",
-    "remotion": "^4.0.485",
+    "remotion": "^4.0.520",
     "yaml": "^2.9.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {
+    "@remotion/cli": "4.0.520",
     "@types/node": "^22.10.0",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",

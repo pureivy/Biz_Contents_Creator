@@ -33,6 +33,39 @@ async function ff(args: string[], timeoutMs: number, signal?: AbortSignal): Prom
 }
 
 /**
+ * 첨부 영상에서 한 구간을 잘라 낸다(2026-09-04 사용자 허락: "숏폼 방향에 맞춰 자르거나 수정해도 됨").
+ *
+ * 왜 파일로 굽는가. 렌더러는 씬마다 클립 '파일 경로' 하나를 받는다(s.videoSrc). 시작 오프셋을
+ * 프롭으로 흘리려면 렌더러·zod 스키마·감속 배율 산식을 한꺼번에 손봐야 하는데, 잘라 둔 파일을
+ * 건네면 그 계약이 하나도 안 바뀐다. 한 영상에서 여러 구간을 쓰는 것도 파일이 갈리니 자연스럽다.
+ *
+ * 9:16 맞춤은 여기서 안 한다 — 렌더러의 objectFit:'cover' 가 이미 채워서 자른다. 여기서 또
+ * 자르면 두 번 잘려 피사체가 밀려난다.
+ *
+ * 재인코딩한다(-c copy 아님) — 스트림 복사는 키프레임 단위로만 잘려 시작 지점이 최대 몇 초까지
+ * 밀린다. 씬 길이에 맞춰 떼는 작업이라 그 오차를 감당할 수 없다.
+ *
+ * 실패는 던진다 — 호출부가 원본 통짜 배치로 되돌린다(사장님이 올린 화면을 조용히 버리지 않는다).
+ */
+export async function cutVideoSegment(
+  src: string, out: string, startSec: number, seconds: number, signal?: AbortSignal,
+): Promise<string> {
+  fs.mkdirSync(path.dirname(out), { recursive: true });
+  // 비트레이트 상한 — 첨부 영상은 대개 메신저를 거쳐 이미 압축돼 온다(실측 원본 3.2Mbps).
+  // crf 만 걸면 x264 가 그 압축 잡티까지 보존하려 들어 8.3초 구간이 21MB 로 부푼다(원본 대비 6배).
+  // 상한을 걸면 6.5MB 이고 1:1 로 봐도 차이가 없다. 렌더가 이 파일을 프레임 단위로 디코드하므로
+  // 부푼 파일은 그대로 렌더 시간이다. preset 을 올리는 쪽은 효과가 없었다(21→19MB, 시간 2배).
+  await ff([
+    '-ss', String(Math.max(0, startSec)), '-i', src, '-t', String(Math.max(0.1, seconds)),
+    '-an', '-c:v', 'libx264', '-preset', 'veryfast', '-crf', '21',
+    '-maxrate', '6M', '-bufsize', '12M', '-pix_fmt', 'yuv420p',
+    '-movflags', '+faststart', out,
+  ], 120_000, signal);
+  if (!fs.existsSync(out) || fs.statSync(out).size <= 0) throw new Error(`구간 추출 실패: ${src}`);
+  return out;
+}
+
+/**
  * 숏폼 썸네일 — final.mp4 의 훅 프레임(≈1s, 페이드인 이후·제목이 이미 구워진 첫 장면)을 dir/thumbnail.jpg 로 1장 추출.
  * 이미 있으면 그대로 반환. 영상 없으면 null. 스튜디오 카드 포스터·다운로드용(발행엔 미사용). best-effort — 실패는 null.
  */
@@ -120,6 +153,35 @@ export async function ensureMetaVideo(dir: string, signal?: AbortSignal): Promis
 }
 
 /**
+ * 발행 완료 쇼츠의 원본 정리 — final.mp4 를 저용량 preview.mp4 로 교체한다(사용자 확정 2026-08-31).
+ * 실패하면 원본을 그대로 둔다(fail-open) — 정리는 산출물을 잃는 대가를 치르면 안 된다.
+ * 반환: 회수한 바이트(0 = 아무것도 안 함).
+ *
+ * 프록시 규격: 세로 960(원본 1920의 절반) · CRF 30 · 오디오 64k. 미리보기 전용이라 화질보다 크기다.
+ * meta.mp4(릴스 업로드용 재인코딩본)와는 목적이 다르다 — 그쪽은 업로드 한도(95MB) 회피용이라 CRF 23.
+ */
+export async function archiveShortsVideo(dir: string, signal?: AbortSignal): Promise<number> {
+  const video = path.join(dir, 'final.mp4');
+  let size = 0;
+  try { size = fs.statSync(video).size; } catch { return 0; } // 이미 없음 — 멱등
+  const out = path.join(dir, 'preview.mp4');
+  const tmp = path.join(dir, `.preview-${Date.now()}-${Math.random().toString(36).slice(2, 8)}.mp4`);
+  try {
+    await ff(['-i', video, '-vf', 'scale=-2:960', '-c:v', 'libx264', '-crf', '30', '-preset', 'veryfast',
+      '-pix_fmt', 'yuv420p', '-c:a', 'aac', '-b:a', '64k', '-movflags', '+faststart', tmp], 600_000, signal);
+    // 프록시가 원본보다 크면(아주 짧은 영상 등) 교체할 이유가 없다 — 원본 유지가 낫다.
+    const proxySize = fs.statSync(tmp).size;
+    if (proxySize >= size) { fs.rmSync(tmp, { force: true }); return 0; }
+    fs.renameSync(tmp, out);
+    fs.rmSync(video, { force: true });   // 프록시가 자리를 잡은 뒤에만 원본 제거
+    return size - proxySize;
+  } catch {
+    try { fs.rmSync(tmp, { force: true }); } catch { /* 무해 */ }
+    return 0; // 재인코딩 실패 — 원본 보존
+  }
+}
+
+/**
  * 씬 배열 → dir/final.mp4 + subtitles.srt. images[i] 는 씬 i 의 배경(없으면 null → 단색 폴백).
  * 개별 씬 실패는 이슈로 기록하고 해당 씬을 단색 배경·무음으로라도 완성(전체 실패 방지).
  */
@@ -140,6 +202,7 @@ export async function renderShortsVideo(
   dir: string, scenes: ShortsScene[], images: Array<string | null>,
   opts: {
     voice?: string; instructions?: string; signal?: AbortSignal;
+    elevenVoiceId?: string; elevenVoiceSettings?: Record<string, number>;
     /** 상단 제목 캘리(투명 PNG) — Remotion 경로와 동일 형태. 폴백에서도 제목이 사라지지 않게(2026-08-08). */
     title?: { imagePath: string; topPct?: number; widthPct?: number };
   } = {},
@@ -171,7 +234,7 @@ export async function renderShortsVideo(
       if (fs.existsSync(remotionMp3)) {
         fs.copyFileSync(remotionMp3, dst);
       } else {
-        const mp3 = await synthesize(scene.narration, { voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE, signal: opts.signal });
+        const mp3 = await synthesize(scene.narration, { voice: opts.voice, instructions: opts.instructions ?? SHORTS_TTS_TONE, elevenVoiceId: opts.elevenVoiceId, elevenVoiceSettings: opts.elevenVoiceSettings, signal: opts.signal });
         fs.writeFileSync(dst, mp3);
       }
       audioDur = await probeDuration(dst);

@@ -19,7 +19,7 @@ import { stdModel, visionCapable } from './visionCommon';
 export interface MotionSceneCtx {
   narration: string;
   screenText?: string;
-  kind?: 'hook' | 'stat' | 'list' | 'quote' | 'chart' | 'cta';
+  kind?: 'hook' | 'stat' | 'list' | 'quote' | 'chart' | 'cta' | 'compare';
 }
 
 /** 씬 묘사에 사람·손·도구가 등장할 위험 판정(순수·정밀도 우선) — 이미지 비전 판별(detectSubjectScenes)의

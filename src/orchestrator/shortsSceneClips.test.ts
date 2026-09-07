@@ -45,3 +45,24 @@ describe('buildI2vBody — 모델별 스키마 분기(순수)', () => {
       .toEqual(buildI2vBody('fal-ai/wan/v2.2-5b/image-to-video', 'p', 'data:x'));
   });
 });
+
+describe('buildI2vBody — Veo 3.1 Lite 브랜치(2026-09-03 실측 검증분)', () => {
+  const body = (): Record<string, unknown> => buildI2vBody('fal-ai/veo3.1/lite/image-to-video', 'p', 'https://x/i.png');
+  it('1080p·4초·9:16 — 실런으로 통과 확인한 조합 그대로', () => {
+    expect(body()).toMatchObject({ duration: 4, resolution: '1080p', aspect_ratio: '9:16' });
+  });
+  it('generate_audio 는 반드시 false — 켜면 요금이 1.6배이고 우리는 내레이션만 쓴다', () => {
+    expect(body().generate_audio).toBe(false);
+  });
+  it('Wan 스키마 필드를 섞어 보내지 않는다 — 비호환 필드는 422 무음 실패를 만든다', () => {
+    const b = body();
+    expect(b.num_frames).toBeUndefined();
+    expect(b.frames_per_second).toBeUndefined();
+    expect(b.negative_prompt).toBeUndefined();
+  });
+  it('Wan 은 종전 스키마를 유지한다 — 모델 교체가 서로를 깨지 않는지', () => {
+    const w = buildI2vBody('fal-ai/wan/v2.2-5b/image-to-video', 'p', 'https://x/i.png');
+    expect(w).toMatchObject({ num_frames: 145, resolution: '720p', aspect_ratio: '9:16' });
+    expect(w.duration).toBeUndefined();
+  });
+});

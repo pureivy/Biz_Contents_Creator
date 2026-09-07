@@ -124,7 +124,14 @@ export function expandTokens(s: string, stems: string[] = []): Set<string> {
   return out;
 }
 
-/** 코퍼스에서 minPieces편 이상에 등장하는 핵심 내용어 = '이미 포화된 소재'. 아이디어 생성이 피하도록 프롬프트에 주입. */
+/**
+ * 코퍼스에서 minPieces편 이상에 등장하는 핵심 내용어 = '이미 포화된 소재'. 아이디어 생성이 피하도록 주입.
+ *
+ * 여기에는 수요 가중을 넣지 않는다(2026-09-04 시도 후 철회). 실측하니 이 목록에 오르는 말은
+ * 수종명이 아니라 일반어였다(나무 33 · 전에 8 · 뿌리 6 · 묘목 5 · 8월 5). 수요 스냅샷은 후보
+ * 키워드 26행짜리라 저런 말의 검색량을 모르고, 그래서 가중을 걸어도 목록이 한 글자도 안 바뀌었다.
+ * '수종당 몇 편'을 정하는 진짜 게이트는 speciesRotation 의 월 상한이다 — 가중은 그쪽에 있다.
+ */
 export function saturatedThemes(existing: ExistingContent[], minPieces = 3, stems: string[] = []): Array<{ token: string; count: number }> {
   const freq = new Map<string, number>();
   for (const e of existing) {

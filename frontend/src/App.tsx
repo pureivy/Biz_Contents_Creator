@@ -39,6 +39,7 @@ import { useJarvisVoice } from "./voice/useJarvisVoice";
 import { JarvisAvatar } from "./jarvis/JarvisAvatar";
 // 무거운 그래프 라이브러리(react-force-graph)는 모달을 열 때만 로드(초기 번들에서 분리).
 const WikiGraphView = lazy(() => import("./panels/WikiGraphView"));
+const MediaLibraryView = lazy(() => import("./panels/MediaLibraryView"));
 
 const AUTONOMY_LABEL = ["Off", "읽기전용", "초안(승인)", "자동"];
 
@@ -99,7 +100,7 @@ function progressNote(
   return "⏳ 편집장이 목표를 분석하는 중…";
 }
 
-type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review" | "perf" | "studio" | "brand";
+type View = "office" | "graph" | "detail" | "employees" | "apikeys" | "llm" | "mcp" | "calendar" | "review" | "perf" | "studio" | "brand" | "media";
 type TLTab = "timeline" | "activity" | "workflow";
 
 const STATUS_LABEL: Record<string, string> = {
@@ -363,6 +364,8 @@ export default function App() {
   const [topicImages, setTopicImages] = useState<Array<{ file: File; url: string }>>([]);
   // 문서 첨부(PDF·HWP/HWPX·DOCX·PPTX·XLSX·텍스트) — 서버가 텍스트 추출해 주제에 병합(이 런 전용, 자료실 미적재).
   const [topicDocs, setTopicDocs] = useState<File[]>([]);
+  // 실촬영 영상 첨부(2026-09-04) — 본 글에는 안 쓰이고 파생 쇼츠의 씬 클립이 된다.
+  const [topicVideos, setTopicVideos] = useState<File[]>([]);
   // 지식 리서치 런 토글 — 켜고 시작하면 조사→토론→두뇌 적재 런(발행 초안 없음, 캘린더 비오염). 시작 후 자동 해제.
   const [researchMode, setResearchMode] = useState(false);
   // 테마(다크 기본 / 라이트 옵트인) — 초기값은 main.tsx 가 이미 <html>에 심었고, 여기선 상태만 동기.
@@ -375,26 +378,33 @@ export default function App() {
   const topicImgInputRef = useRef<HTMLInputElement>(null);
   // 서버 extract.ts 지원 확장자와 동기(isSupportedExt).
   const DOC_EXTS = new Set(["pdf", "docx", "pptx", "hwpx", "hwp", "hwp3", "hwpml", "xlsx", "xls", "txt", "md", "markdown", "csv", "json", "text", "log"]);
+  // 서버 VIDEO_EXTS 와 동기 — 쇼츠 렌더러가 다루는 범위.
+  const VIDEO_EXTS = new Set(["mp4", "mov", "m4v", "webm"]);
   const addTopicFiles = (files: FileList | File[]) => {
     const all = Array.from(files);
     const imgs = all.filter((f) => f.type.startsWith("image/"));
-    const docs = all.filter((f) => !f.type.startsWith("image/") && DOC_EXTS.has((f.name.split(".").pop() || "").toLowerCase()));
+    const vids = all.filter((f) => !f.type.startsWith("image/")
+      && (f.type.startsWith("video/") || VIDEO_EXTS.has((f.name.split(".").pop() || "").toLowerCase())));
+    const docs = all.filter((f) => !imgs.includes(f) && !vids.includes(f) && DOC_EXTS.has((f.name.split(".").pop() || "").toLowerCase()));
     // objectURL 은 캡(각 8개)을 밖에서 적용한 뒤 이벤트 핸들러에서 1회 생성 — 상태 업데이터 안에서 만들면
     // StrictMode 이중 호출·slice 탈락분이 revoke 없이 새어 나가고, 탈락 자체도 무통보였다.
     const takeImgs = imgs.slice(0, Math.max(0, 8 - topicImages.length)); // Claude 비전 캡 8장
     const takeDocs = docs.slice(0, Math.max(0, 8 - topicDocs.length));
+    const takeVids = vids.slice(0, Math.max(0, 4 - topicVideos.length)); // 서버 상한과 동기(4개)
+    if (takeVids.length) setTopicVideos((prev) => [...prev, ...takeVids]);
     if (takeImgs.length) {
       const entries = takeImgs.map((f) => ({ file: f, url: URL.createObjectURL(f) }));
       setTopicImages((prev) => [...prev, ...entries]);
     }
     if (takeDocs.length) setTopicDocs((prev) => [...prev, ...takeDocs]);
-    const unsupported = all.length - imgs.length - docs.length;
-    const overCap = (imgs.length - takeImgs.length) + (docs.length - takeDocs.length);
+    const unsupported = all.length - imgs.length - docs.length - vids.length;
+    const overCap = (imgs.length - takeImgs.length) + (docs.length - takeDocs.length) + (vids.length - takeVids.length);
     const msgs: string[] = [];
     if (unsupported > 0) msgs.push(`미지원 형식 ${unsupported}개`);
     if (overCap > 0) msgs.push(`개수 상한(각 8개) 초과 ${overCap}개`);
-    if (msgs.length) window.alert(`${msgs.join(", ")} 제외 — 이미지·PDF·HWP/HWPX·DOCX·PPTX·XLSX·텍스트, 각 최대 8개만 첨부됩니다`);
+    if (msgs.length) window.alert(`${msgs.join(", ")} 제외 — 이미지(8)·영상 mp4/mov/webm(4)·문서 PDF/HWP/HWPX/DOCX/PPTX/XLSX/텍스트(8)만 첨부됩니다`);
   };
+  const removeTopicVideo = (i: number) => setTopicVideos((prev) => prev.filter((_, j) => j !== i));
   const removeTopicImage = (i: number) => {
     setTopicImages((prev) => { const t = prev[i]; if (t) URL.revokeObjectURL(t.url); return prev.filter((_, j) => j !== i); });
   };
@@ -769,8 +779,9 @@ export default function App() {
       let images: string[] | undefined;
       let docs: string[] | undefined;
       const startsNewRun = !!directed || currentStatus !== "running";
-      if ((topicImages.length || topicDocs.length) && startsNewRun) {
-        const up = await uploadRunAttachments([...topicImages.map((x) => x.file), ...topicDocs]);
+      let videos: string[] | undefined;
+      if ((topicImages.length || topicDocs.length || topicVideos.length) && startsNewRun) {
+        const up = await uploadRunAttachments([...topicImages.map((x) => x.file), ...topicVideos, ...topicDocs]);
         if (!up.ok) { window.alert(`첨부 업로드 실패: ${up.error || "알 수 없는 오류"}`); setChat(t); setDirectedTarget(prevTarget); return; }
         if (up.skipped.length) {
           // 서버가 제외한 파일(용량·형식·개수 상한)을 무통보로 흘리지 않는다 — 사용자가 계속 여부를 결정.
@@ -781,8 +792,9 @@ export default function App() {
           }
         }
         images = up.images.length ? up.images : undefined;
+        videos = up.videos.length ? up.videos : undefined;
         docs = up.docs.length ? up.docs : undefined;
-      } else if (topicImages.length || topicDocs.length) {
+      } else if (topicImages.length || topicDocs.length || topicVideos.length) {
         // 진행 중 런에 지시 주입 — 첨부는 전달되지 않고 남는다(다음 새 런에 함께). 무단 소실·무단 이월 방지 고지.
         window.alert("첨부 파일은 진행 중 런에는 전달되지 않습니다 — 새 런을 시작할 때 함께 전달됩니다.");
       }
@@ -797,7 +809,7 @@ export default function App() {
             (ev) => apply(ev),
             (rid) => setRunId(rid),
             () => useStore.getState().lastSeq,
-            { agent: directed.id, images, docs },
+            { agent: directed.id, images, videos, docs },
           );
           clearTopicAttachments();
           setResearchMode(false); // 토글은 제출 1회성 — 지명 런으로 소진돼도 다음 일반 주제가 몰래 리서치가 되지 않게
@@ -817,7 +829,7 @@ export default function App() {
             (rid) => setRunId(rid),
             () => useStore.getState().lastSeq,
             { path: runPath || undefined,
-              budget: runBudget === "" ? undefined : Number(runBudget), images, docs,
+              budget: runBudget === "" ? undefined : Number(runBudget), images, videos, docs,
               mission: researchMode ? "research" : undefined,
               persona: persona || undefined,
               personaText: persona === "custom" ? personaText : undefined },
@@ -880,6 +892,22 @@ export default function App() {
               <button type="button" title="제거" onClick={() => removeTopicDoc(i)}>×</button>
             </span>
           ))}
+          {/* 사진을 올리면 글 참고로만 쓰이는 게 아니라 파생 쇼츠 화면에 실제로 들어간다 —
+              모르면 "왜 내 사진이 영상에 나오지"가 되므로 올릴 때 알려 준다(2026-09-04). */}
+          {topicVideos.map((f, i) => (
+            <span key={`v-${f.name}-${i}`} className="chat-attach-doc" title={f.name}>
+              <Ico name="play" size={11} />
+              <span className="chat-attach-doc-name">{f.name}</span>
+              <button type="button" title="제거" onClick={() => removeTopicVideo(i)}>×</button>
+            </span>
+          ))}
+          {(topicImages.length > 0 || topicVideos.length > 0) && (
+            <span className="chat-attach-note">
+              {topicImages.length > 0 && `사진 ${topicImages.length}장 — 쇼츠 씬 배경으로 쓰이고, 나머지 씬은 이 사진의 톤에 맞춰 생성됩니다`}
+              {topicImages.length > 0 && topicVideos.length > 0 && " / "}
+              {topicVideos.length > 0 && `영상 ${topicVideos.length}개 — 길이가 맞는 본문 씬에 그대로 들어갑니다`}
+            </span>
+          )}
         </div>
       )}
       <textarea
@@ -931,14 +959,14 @@ export default function App() {
         onClick={toggleConvo}>🗣️ 자비스 {convo ? "ON" : "OFF"}</button>
       {/* 첨부(멀티모달: 이미지+문서) — 새 런에만. 붙여넣기(Cmd+V)로도 첨부된다. */}
       {s.status !== "running" && (
-        <button type="button" className={`run-opt-toggle ${topicImages.length + topicDocs.length ? "active" : ""}`}
+        <button type="button" className={`run-opt-toggle ${topicImages.length + topicDocs.length + topicVideos.length ? "active" : ""}`}
           title="파일 첨부 — 이미지는 비전 분석, 문서(PDF·HWP/HWPX·DOCX·PPTX·XLSX·텍스트)는 내용 추출되어 직원들에게 전달됩니다(각 최대 8개)"
           onClick={() => topicImgInputRef.current?.click()}>
-          <Ico name="cards" size={11} /> 첨부{topicImages.length + topicDocs.length ? ` ${topicImages.length + topicDocs.length}` : ""}
+          <Ico name="cards" size={11} /> 첨부{topicImages.length + topicDocs.length + topicVideos.length ? ` ${topicImages.length + topicDocs.length + topicVideos.length}` : ""}
         </button>
       )}
       <input ref={topicImgInputRef} type="file" multiple style={{ display: "none" }}
-        accept="image/*,.pdf,.docx,.pptx,.hwpx,.hwp,.xlsx,.xls,.txt,.md,.csv,.json"
+        accept="image/*,video/mp4,video/quicktime,video/webm,.mp4,.mov,.m4v,.webm,.pdf,.docx,.pptx,.hwpx,.hwp,.xlsx,.xls,.txt,.md,.csv,.json"
         onChange={(e) => { if (e.target.files) addTopicFiles(e.target.files); e.target.value = ""; }} />
       {/* 지식 리서치 런 — 조사→토론→두뇌 적재. 발행 초안을 만들지 않아 캘린더에 쌓이지 않는다. */}
       {s.status !== "running" && !directedTarget && (
@@ -1575,6 +1603,7 @@ export default function App() {
           <button className={view === "review" ? "active" : ""} onClick={() => setView("review")}><Ico name="eye" size={12} /> 검토</button>
           <button className={view === "perf" ? "active" : ""} onClick={() => setView("perf")}><Ico name="chart" size={12} /> 성과</button>
           <button className={view === "studio" ? "active" : ""} onClick={() => setView("studio")}><Ico name="pencil" size={12} /> 제작실</button>
+          <button className={view === "media" ? "active" : ""} onClick={() => setView("media")}><Ico name="cards" size={12} /> 보관소</button>
         </div>
         <div className="viewtoggle">
           <button className={view === "apikeys" ? "active" : ""} onClick={() => setView("apikeys")}><Ico name="key" size={12} /> API 키</button>
@@ -1683,6 +1712,10 @@ export default function App() {
       ) : view === "studio" ? (
         <main className="employees-stage">
           <StudioView />
+        </main>
+      ) : view === "media" ? (
+        <main className="employees-stage">
+          <Suspense fallback={null}><MediaLibraryView /></Suspense>
         </main>
       ) : view === "brand" ? (
         <main className="employees-stage">

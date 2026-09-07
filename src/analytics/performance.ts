@@ -19,6 +19,15 @@ export interface MetricSample {
   reach?: number;
   saved?: number;
   shares?: number;
+  /**
+   * 유튜브 애널리틱스 수집(youtube:analytics) 전용 — 시청 지속률·유입 경로(하위호환 optional).
+   * 조회수만으로는 '노출이 끊긴 것'과 '보다가 이탈한 것'을 못 가른다(2026-09-02 사고).
+   * avgViewPct 는 반복 재생 때문에 100 을 넘을 수 있다. traffic 키는 insightTrafficSourceType.
+   */
+  avgViewPct?: number;
+  avgViewSec?: number;
+  watchMinutes?: number;
+  traffic?: Record<string, number>;
   searchInflow: SearchInflow[];
   /** 'manual' | 'scrape:<collector>' — 수집 출처(신뢰도 구분). */
   source?: string;

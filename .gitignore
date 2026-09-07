@@ -28,3 +28,6 @@ scripts/blog_skills/__pycache__/
 
 # 데스크탑 런처(.app) 로그
 .launcher-logs/
+
+# 미리보기 렌더 산출물(pnpm preview)
+out/

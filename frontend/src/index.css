@@ -569,6 +569,8 @@ button.upload-retry:hover { background: var(--panel2); }
   padding: 0 6px 0 9px; border-radius: 999px; border: 1px solid var(--border); background: var(--bg);
   font-size: 11.5px; color: var(--muted); flex: none; }
 .chat-attach-doc-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+/* 첨부 사진 안내 — 사진이 영상 화면에 실제로 들어간다는 사실을 올리는 시점에 알린다. */
+.chat-attach-note { flex-basis: 100%; font-size: 11px; line-height: 1.5; opacity: .72; padding: 2px 2px 0; }
 .chat-attach-doc button { width: 15px; height: 15px; border: none; border-radius: 50%; flex: none;
   background: transparent; color: var(--muted); font-size: 12px; line-height: 1; cursor: pointer;
   display: grid; place-items: center; padding: 0; }
@@ -1778,3 +1780,35 @@ button.upload-retry:hover { background: var(--panel2); }
    위로 떠 보인다. 칩은 inline-block 흐름으로 줄바꿈(칩 사이 간격은 margin). */
 .perf-inflow { max-width: 320px; }
 .perf-inflow .chip { display: inline-block; margin: 2px 4px 2px 0; white-space: nowrap; }
+
+/* ── 사진·영상 보관소 ─────────────────────────────────────────── */
+/* 스테이지(.employees-stage)는 overflow:hidden 인 flex 행이라, 그 안의 뷰가 스스로 스크롤
+   창이 되어야 한다(.apikeys 와 같은 규칙 — 위 292행 주석 참조). 이게 없어서 보관소는
+   소재가 한 화면을 넘기는 순간 아래쪽에 손이 닿지 않았다(실사고 2026-09-07). */
+.media-lib { height: 100%; overflow-y: auto; padding: 20px 24px 60px; max-width: 1100px; margin: 0 auto; }
+.employees-stage > .media-lib { flex: 1 1 auto; min-width: 0; }
+.media-head { display: flex; gap: 20px; justify-content: space-between; align-items: flex-start; flex-wrap: wrap; margin-bottom: 20px; }
+.media-head h2 { margin: 0 0 6px; font-size: 18px; }
+.media-head p { margin: 0; font-size: 13px; opacity: .72; max-width: 52ch; line-height: 1.6; }
+.media-upload { display: flex; gap: 6px; align-items: center; flex-wrap: wrap; }
+.media-upload input { font-size: 12px; padding: 5px 8px; border-radius: 6px; border: 1px solid var(--line, #333); background: transparent; color: inherit; width: 140px; }
+.media-upload button { font-size: 12px; padding: 6px 12px; border-radius: 6px; cursor: pointer; display: inline-flex; align-items: center; gap: 5px; }
+.media-empty { font-size: 13px; opacity: .7; padding: 28px 0; }
+.media-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(190px, 1fr)); gap: 12px; }
+.media-card { border: 1px solid var(--line, #333); border-radius: 9px; overflow: hidden; display: flex; flex-direction: column; }
+.media-thumb { position: relative; aspect-ratio: 3/4; background: #0d0f12; }
+.media-thumb img, .media-thumb video { width: 100%; height: 100%; object-fit: cover; display: block; }
+.media-kind { position: absolute; left: 6px; bottom: 6px; font-size: 10px; padding: 2px 6px; border-radius: 3px; background: rgba(0,0,0,.66); color: #fff; }
+.media-meta { padding: 8px; display: flex; flex-direction: column; gap: 5px; }
+.media-name { font-size: 11.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.media-sub { font-size: 10.5px; opacity: .6; }
+.media-meta input { font-size: 11px; padding: 4px 6px; border-radius: 5px; border: 1px solid var(--line, #333); background: transparent; color: inherit; width: 100%; }
+.media-del { font-size: 11px; padding: 4px; border-radius: 5px; cursor: pointer; opacity: .75; }
+
+/* 성과 탭 — 유튜브 검색 유입어(2026-09-04). 제목 아래 한 줄, 표 폭을 늘리지 않는다. */
+.perf-inflow { display: flex; flex-wrap: wrap; gap: 4px; margin-top: 3px; }
+.perf-inflow-k {
+  font-size: 10.5px; line-height: 1.5; padding: 0 5px; border-radius: 3px;
+  background: var(--chip-bg, rgba(127, 127, 127, .12)); color: var(--muted, #6b7280); white-space: nowrap;
+}
+.perf-inflow-k b { font-weight: 600; color: var(--fg, inherit); font-variant-numeric: tabular-nums; }

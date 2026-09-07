@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { speciesInText, speciesCoverage, overSpeciesCap, speciesRotationBlock, SPECIES_MONTHLY_CAP } from './speciesRotation';
+import { speciesInText, speciesCoverage, overSpeciesCap, speciesRotationBlock, SPECIES_MONTHLY_CAP, speciesCapFor } from './speciesRotation';
 
 const CAT = [
   { group: '유실수', species: [{ name: '사과나무', aliases: ['사과'] }, { name: '배나무' }, { name: '블루베리', aliases: ['블루베리나무'] }, { name: '매실나무', aliases: ['매실'] }] },
@@ -56,4 +56,41 @@ describe('speciesRotationBlock — 제안 금지·피함·우선 목록', () => 
     expect(b).toContain('최소 5개');
   });
   it('카탈로그 없으면 빈 문자열', () => { expect(speciesRotationBlock(undefined, new Map())).toBe(''); });
+});
+
+describe('speciesCapFor — 수요 가중 월 상한(순수, 2026-09-04)', () => {
+  it('수요가 크면 몇 편 더 허용한다', () => {
+    expect(speciesCapFor(7110)).toBe(4);   // 회양목
+    expect(speciesCapFor(1930)).toBe(3);   // 홍매화
+    expect(speciesCapFor(230)).toBe(2);    // 포도나무 — 종전 그대로
+  });
+  it('수요 미상·0 은 종전 상한 그대로 — 조이지 않는다', () => {
+    // 이 채널 최고 성적(하스카프베리 검색 1,085회)이 수요 목록 밖 수종에서 나왔다.
+    // 낮은 수요로 상한을 낮췄다면 그 발견 자체를 막았을 것이다.
+    expect(speciesCapFor(undefined)).toBe(2);
+    expect(speciesCapFor(0)).toBe(2);
+    expect(speciesCapFor(NaN)).toBe(2);
+    expect(speciesCapFor(22)).toBe(2);     // 배롱나무 — 종전대로 막힌다
+  });
+});
+
+describe('overSpeciesCap — 수종별 상한 함수', () => {
+  const catalog = [{ group: '관목', species: [{ name: '배롱나무' }, { name: '회양목' }] }];
+  const cov = new Map([['배롱나무', 2], ['회양목', 2]]);
+
+  it('숫자 상한은 종전대로 동작한다', () => {
+    expect(overSpeciesCap('배롱나무 전정', cov, catalog)).toMatchObject({ name: '배롱나무', count: 2 });
+  });
+  it('수종별 함수를 주면 그 수종만 여유가 생긴다', () => {
+    const capFor = (n: string) => (n === '회양목' ? 4 : 2);
+    expect(overSpeciesCap('회양목 생울타리', cov, catalog, capFor)).toBeNull();
+    expect(overSpeciesCap('배롱나무 전정', cov, catalog, capFor)).not.toBeNull();
+  });
+  it('상한 함수가 던지면 종전 상한으로 떨어진다', () => {
+    const boom = (): never => { throw new Error('수요 데이터 고장'); };
+    expect(overSpeciesCap('배롱나무 전정', cov, catalog, boom)).not.toBeNull();
+  });
+  it('카탈로그에 없는 수종은 상한 대상이 아니다', () => {
+    expect(overSpeciesCap('하스카프베리 재배', cov, catalog, () => 4)).toBeNull();
+  });
 });

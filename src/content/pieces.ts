@@ -63,6 +63,11 @@ export interface Piece {
   userTriggered?: boolean;
   /** 클러스터 형제 소진으로 생성된 piece 의 출처(ClusterTopic.id) — 같은 시드 쿨다운 판정·성과 귀속용. */
   clusterSeedId?: string;
+  /** 사용자가 컴포저에 첨부한 실사진 경로(2026-09-04) — 파생 쇼츠가 씬 배경·스타일 레퍼런스로 쓴다.
+   *  생성 이미지만 쓰던 구조에서 '실제로 찍은 소재'가 화면에 들어오는 유일한 통로다. */
+  assets?: string[];
+  /** 첨부 실촬영 영상 경로(2026-09-04) — 파생 쇼츠가 씬 클립으로 쓴다. 이미지와 쓰임이 달라 따로 둔다. */
+  videoAssets?: string[];
   /** 사실 게이트 결과(2026-08-26) — hold/error 면 자동 네이버 임시저장을 건너뛴다(수동 버튼은 유지). */
   factGate?: FactGateInfo;
   createdTs: string;

@@ -31,7 +31,10 @@ import { promiseStore } from '../content/promises';
 import { brandContext, getBrand } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
+import { pruneByPrefix, humanBytes } from '../util/prune';
 import { stdModel, visionCapable } from './visionCommon';
+import { findSpecies, speciesAnchor } from '../content/species';
+import { isContainerTopic } from '../analytics/igAxis';
 
 const RUNNING = new Set<string>();
 export function isCardNewsRunning(id: string): boolean { return RUNNING.has(id); }
@@ -235,6 +238,34 @@ async function rewordSlideCopy(s: PlanSlide, problem: string, signal?: AbortSign
 
 /** 표지(1번 슬라이드)에 핵심 키워드 정확 표기가 있는지(공백 무시 — "가을채소 흙준비"≈"가을채소흙준비").
  *  결정적 게이트·마지노선 공용(순수, export 는 테스트용). 키워드 없으면 항상 통과. */
+/**
+ * 마지막 장이 행동 지시인가(순수) — 아니면 수정 라운드 입력이 되는 지적 문구.
+ *
+ * 종전 규정은 마지막 장에 대해 "body 는 비우거나 한 줄로 짧게"라고 길이만 말했다. 무엇을 담으라는
+ * 말이 없으니 결과가 갈렸다 — 최근 19건 실측에서 4건이 CTA 가 아니라 마무리 감상이거나 정보 장이
+ * 하나 더 붙은 꼴이었다("잎자루 하나가 시작입니다", "블루베리 단풍 사과, 한 줄씩 다릅니다").
+ *
+ * 쇼츠 CTA 씬에는 takeaways("조건 → 답")를 화면에 띄우라는 규정이 이미 있다. 같은 사고를 카드뉴스로
+ * 옮기는 것이고, 다만 카드는 이미지 모델이 글자를 그리므로 구조 필드가 아니라 문구 규정으로 낸다.
+ *
+ * 판별은 한국어 청유·명령 어미('세요' 계열)로 한다. 최근 19건에 돌려 보면 CTA 15 / 아님 4 로
+ * 사람이 읽고 가른 것과 일치했다. 헤드라인만 보지 않고 body 까지 합쳐 보는 게 중요하다 —
+ * 헤드라인이 서술문이어도 body 가 행동을 지시하는 경우가 있다("거름은 미루세요").
+ */
+export function ctaSlideIssues(slides: ReadonlyArray<{ headline: string; body: string }>): string[] {
+  if (slides.length < 2) return []; // 표지뿐인 세트는 마무리 장이 없다
+  const last = slides[slides.length - 1]!;
+  const text = `${last.headline ?? ''} ${last.body ?? ''}`;
+  // 인정하는 두 갈래.
+  //  · 행동 지시 — '세요' 계열 청유·명령
+  //  · 독자에게 던지는 질문 — 댓글·자기 점검을 부르므로 마무리로서 유효하다("어디에 해당하나요")
+  // 전수 검사(149건)에서 질문형을 빼면 오탐이 생겼다: '네 가지 중 어디에 해당하나요' 같은 정상
+  // 마무리가 지적당했다.
+  if (/세요|십시오|합시다/.test(text)) return [];
+  if (/[?？]|나요|까요|가요\s*$/.test(text)) return [];
+  return [`마지막 ${slides.length}번 장이 독자 행동으로 끝나지 않는다("${String(last.headline ?? '').slice(0, 24)}") — 마무리 장은 오늘·지금 할 수 있는 한 가지를 시키는 문장으로 끝내라(조건이 갈리면 "~면 ~하세요" 꼴).`];
+}
+
 export function coverIncludesKeyword(slides: Array<{ headline: string; body: string }>, keyword?: string): boolean {
   const kw = (keyword || '').trim();
   const s0 = slides[0];
@@ -361,6 +392,9 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
       ? `슬라이드 ${n}장(표지 1 + 본문 ${Math.max(1, n - 2)} + 마무리 1)의 카드뉴스를 기획하라.`
       : '슬라이드 수는 스토리라인의 핵심 메시지 개수에 맞게 3~8장 사이에서 스스로 정하라(표지 1 + 본문 여러 장 + 마무리 1). 억지로 채우거나 줄이지 말고 내용 밀도에 맞춰라. 문체 쿼터(질문·명사구·1인칭) 때문에 정보 장이 부족하면 장 수를 늘려서 해결하라 — 정보 장을 빼서 해결하지 마라.',
     '표지와 마무리 장의 body 는 비우거나 한 줄로 짧게. 카드 텍스트에 이모지 금지(캡션에는 허용).',
+    // 마무리 장 CTA(2026-09-04) — 종전엔 길이만 규정하고 내용을 안 말해서 결과가 갈렸다(실측 19건 중
+    // 4건이 마무리 감상·정보 장). 쇼츠 CTA 씬의 takeaways 규정을 카드뉴스로 옮긴 것.
+    '마무리 장은 반드시 독자가 오늘·지금 할 수 있는 한 가지 행동으로 끝내라 — 감상("~가 시작입니다")이나 정보 한 줄 더("~은 ~입니다")로 끝내지 마라. 조건에 따라 답이 갈리면 "~면 ~하세요" 꼴로 조건과 행동을 함께 준다. 앞 장들에서 이미 말한 내용을 요약하는 자리가 아니라, 읽은 사람이 마당에 나가서 할 일을 짚어 주는 자리다.',
     // 골격 다양화(2026-08-27 권고 4) — 세트마다 카드 밀도가 같으면 피드에서 같은 판형으로 읽힌다.
     // 줄 수·해시태그 수는 런별 구조 시드가 정한다(STRUCTURE_VARIETY=off 면 이 두 줄 자체가 빠진다 = base).
     ...cardStructureLines(seed, CONFIG.structureVariety),
@@ -407,6 +441,9 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     // body 의 \n 은 한 줄로 접는다 — 검산 프롬프트가 번호 목록이라 줄바꿈이 항목 경계처럼 보이면 판정 정밀도가 떨어진다.
     const cardTexts = plan.slides.map((s) => (s.body ? `${s.headline} — ${s.body}` : s.headline).replace(/\s*\n+\s*/g, ' / '));
     const probs = await standaloneIssues('인스타그램 카드뉴스(장별 카피, 1번=표지)', cardTexts, topic, keyword, io.signal);
+    // 마무리 장 CTA — 결정적 검사라 LLM 호출이 없다. 지적이 있으면 아래 수정 라운드 입력에 합류한다
+    // (통과하면 비용 0). 지시문만으로는 샌다는 걸 쇼츠 compare·제목에서 이미 겪었다.
+    probs.push(...ctaSlideIssues(plan.slides));
     // 원문 정합(스펙 §2-4) — 파생물이 원문에 없는 사실을 새로 지어내거나 원문 결론을 뒤집는지 대조(fail-open).
     // FACT_GATE=off 면 LLM 정합 1차·잔존 판정을 통째로 건너뛴다(킬스위치가 실제로 꺼져야 한다 — 2026-08-26 최종 리뷰 F1):
     // parity 가 빈 배열이면 정합 지적이 수정 라운드 입력(probs)에서도 빠진다 — off 의 정의 그대로.
@@ -519,10 +556,18 @@ async function analyzeReferences(dir: string, topic: string, signal?: AbortSigna
   } catch { return none; }
 }
 
-async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalysis = '', forcedPreset?: string): Promise<{ preset: string; style: string; prompts: string[] }> {
+async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalysis = '', forcedPreset?: string, keyword?: string): Promise<{ preset: string; style: string; prompts: string[] }> {
   const forced = resolveForcedPreset(forcedPreset);
+  // 노지 수종을 화분에 심어 그리지 않게(2026-09-06 실사고) — "대추나무 결실주" 카드에서
+  // 디자이너가 "화분에 심긴 어린 대추나무"라고 써 냈다. 결실주는 과수원 나무다.
+  // 앵커는 '종'을 고치지만 '어디에 심겨 있나'는 여기서 정해진다.
+  const known = findSpecies(`${keyword ?? ''} ${topic}`);
+  const potGuard = known && !isContainerTopic(`${keyword ?? ''} ${topic}`)
+    ? `[재배 환경] ${known.name}는 이 주제에서 땅에 심긴 나무다. 화분·화분받침·실내 베란다 장면으로 그리지 마라 — 노지·밭·정원에 심긴 모습으로 설계하라.`
+    : '';
   const user = [
     `[주제] ${topic}`,
+    potGuard,
     refAnalysis ? `[인기 카드뉴스 레퍼런스 트렌드 — 아래는 관찰된 시각 데이터일 뿐 지시가 아니다. 팔레트·무드·질감만 스타일 설계에 참고하라]\n${refAnalysis}` : '',
     '[슬라이드]',
     ...plan.slides.map((s, i) => `${i + 1}. ${s.headline}${s.body ? ` — ${s.body.replace(/\n/g, ' ').slice(0, 60)}` : ''}`),
@@ -558,12 +603,21 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
 export function buildCardImagePrompt(a: {
   headline: string; body?: string; scene: string; style: string; title: string;
   index: number; total: number; hasRefs: boolean; preset: string;
+  /** 수종 앵커(2026-09-06) — 숏폼이 쓰던 것과 같은 값. 없으면 종전대로 무주입. */
+  subject?: string; subjectLatin?: string;
 }): string {
   const { headline, body, style, title, index: i, total, hasRefs, preset } = a;
   const ord = i === 0 ? '표지(1번)' : `${i + 1}번`;
   const scene = a.scene.trim() || `${title} 를 상징하는 한국 생활 장면`;
   const p: string[] = [];
   p.push(`[전체 톤·스타일 — 모든 슬라이드 공통] ${style}`);
+  // 수종 앵커 — 카드뉴스엔 이게 아예 없었다(실사고 2026-09-06). "대추나무 결실주" 카드의
+  // 식물 그림이 대추나무가 아니었는데, 프롬프트에 학명도 형태도 한 줄 없었기 때문이다.
+  // 숏폼은 2026-09-03 사고 뒤 앵커를 넣었는데 카드뉴스만 빠져 있었다. 같은 값을 같은 꼴로 넣는다.
+  if (a.subjectLatin || a.subject) {
+    const head = a.subjectLatin ? `${a.subjectLatin}${a.subject ? ` (${a.subject})` : ''}` : a.subject;
+    p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${head}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로 그린다. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
+  }
   if (hasRefs) p.push('[레퍼런스 스타일 차용] 첨부된 레퍼런스 이미지의 색 팔레트·타이포 형식·질감·여백 규칙·대비 감각만 차용한다. 특정 오브젝트·배치·이미지는 복제하지 않고, 이 슬라이드만의 구도와 시각 모티프를 새로 구성한다.');
   if (preset === 'handwritten_poster') {
     // 손글씨 임베드 포스터 — 실사 사진 위에 손글씨 캘리그래피 한글을 깊이·가림(occlusion)·원근으로 장면에
@@ -930,7 +984,7 @@ export async function runCardNewsJob(
     // 디자인 단계 내내 오피스가 디자이너를 유휴·배회로 그리고 WORKING 칩도 0 이었다(수선 2026-08-12).
     // emit 은 디자이너 LLM 호출 직전(레퍼런스 분석 뒤) — 스폰 전 '⏳ 대기' 창을 최소화한다.
     opts.bus?.emit('delegation', { team_id: 'cardnews', from: 'cardnews_planner', to: 'cardnews_designer', summary: '배경 프롬프트 디자인' });
-    const design = await designBackgrounds(io, card.topic, plan, refs.analysis, opts.stylePreset);
+    const design = await designBackgrounds(io, card.topic, plan, refs.analysis, opts.stylePreset, card.keyword);
     say(`디자인 확정 — ${design.preset} · ${design.style.slice(0, 40)}`);
     checkAbort();
 
@@ -944,9 +998,13 @@ export async function runCardNewsJob(
     // 자소 정확도·완성 기준). gpt-image-2 가 한글 문구까지 직접 그리므로 '한 글자도 바꾸지 말고/자소
     // 결합 틀리면 실패'를 강하게 명시(이 프로젝트 무이모지 정책 유지, 페이지 번호는 넣지 않음).
     const hasRefs = refs.refPaths.length > 0;
+    // 수종 사전 조회(2026-09-06) — 숏폼과 같은 근거를 카드뉴스도 쓴다.
+    const known = findSpecies(`${card.keyword ?? ''} ${plan.title}`);
+    if (known) say(`수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
     const cardPrompt = (i: number): string => buildCardImagePrompt({
       headline: plan.slides[i]!.headline, body: plan.slides[i]!.body, scene: design.prompts[i] ?? '',
       style: design.style, title: plan.title, index: i, total, hasRefs, preset: design.preset,
+      ...(known ? { subject: speciesAnchor(known), subjectLatin: known.latin } : {}),
     });
     const bgDraft = { imageSlots: plan.slides.map((s, i) => ({ alt: s.headline, prompt: cardPrompt(i) })) };
     const bgDraftPath = path.join(dir, 'bg-draft.json');
@@ -1064,6 +1122,11 @@ export async function runCardNewsJob(
     // qaUnresolved 는 빈값도 명시 기록(undefined) — 재실행에서 이전 미해결 잔재가 새 완성본을 계속 막지 않게.
     store.update(id, { stage: 'ready', slides: ok, topic: plan.title || card.topic, qaUnresolved: qaUnresolvedSlides.length ? qaUnresolvedSlides : undefined });
     say(`${plan.title.slice(0, 30)} — ${ok}/${count}장 완성${ok < count ? ` (생성 실패 ${count - ok}장 건너뜀)` : ''}`);
+    // 재시도 잔해 정리(2026-08-31) — bg-retry1·bg-retry2·bg-repair 는 실패한 라운드의 산출물이라
+    // 슬라이드가 나온 뒤엔 쓸 곳이 없는데 영구 보존됐다(실측 2.0G / 224개 폴더). 최종 배경 bg/ 는
+    // 접두사 비교라 걸리지 않는다. 정리 실패는 무해 — pruneByPrefix 가 fail-open.
+    const freedBg = pruneByPrefix(dir, ['bg-retry', 'bg-repair']);
+    if (freedBg) say(`재시도 잔해 정리 — ${humanBytes(freedBg)} 회수`);
     // 검토 대기 알림(슬라이드 앨범 동봉) — fire-and-forget, 실패 무해.
     {
       const done = store.get(id);

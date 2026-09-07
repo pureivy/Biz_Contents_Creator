@@ -70,6 +70,11 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
     if (r.error) setThumbErr(r.error); else onChanged(); // updatedTs 갱신 → 포스터 새로고침
   };
   const running = RUNNING_STAGES.has(s.stage);
+  // 채널 분리(2026-09-03) — 이 편이 어느 채널용인지에 따라 발행 버튼을 가린다.
+  // 레거시(platform 없음)는 종전대로 양쪽 다 — 기존 108편의 발행 경로를 막지 않는다.
+  const canYt = !s.platform || s.platform === "youtube";
+  const canIg = !s.platform || s.platform === "instagram";
+  const platformChip = s.platform === "youtube" ? "유튜브용" : s.platform === "instagram" ? "인스타용" : "";
   const captionFull = [s.title, s.description, (s.hashtags ?? []).join(" ")].filter(Boolean).join("\n\n");
   const copyCaption = async () => {
     try { await navigator.clipboard.writeText(captionFull); setCopied(true); setTimeout(() => setCopied(false), 1500); }
@@ -80,13 +85,14 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap" }}>
         <span className="badge">{STAGE_LABEL[s.stage] ? <><Ico name={STAGE_LABEL[s.stage].icon} size={10} /> {STAGE_LABEL[s.stage].label}</> : s.stage}</span>
         <strong>{s.title ?? s.topic}</strong>
+        {platformChip && <span className="chip" title="이 편은 이 채널 전용으로 기획됐습니다 — 다른 채널 발행은 막혀 있습니다">{platformChip}</span>}
         {s.keyword && <span className="chip"><Ico name="location" size={11} /> {s.keyword}</span>}
         {s.sourcePieceId && <span className="chip" title="블로그 초안에서 파생"><Ico name="document" size={11} /> 블로그 파생</span>}
         {typeof s.durationSec === "number" && <span className="chip">⏱ {s.durationSec}초</span>}
         <span className="muted" style={{ marginLeft: "auto" }}>{fmtWhen(s.updatedTs)}</span>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 6 }} className="muted">
-        {s.writer && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Avatar id="shorts_writer" glyph="✍️" size={18} head /> 대본 {s.writer}</span>}
+        {s.writer && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }} title="편마다 작가가 바뀝니다 — 문체와 낭독 목소리도 각자 다릅니다"><Avatar id={s.writerId ?? "shorts_writer"} glyph="✍️" size={18} head /> 대본 {s.writer}</span>}
         {s.director && <span style={{ display: "inline-flex", alignItems: "center", gap: 4 }}><Avatar id="shorts_director" glyph="🎬" size={18} head /> 연출 {s.director}</span>}
         {running && <span>… 작업 중(자동 갱신)</span>}
         {s.stage === "ready" && typeof s.bgFallbacks === "number" && s.bgFallbacks > 0 && (
@@ -126,7 +132,7 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
             <button className="btn ghost" disabled={thumbBusy} onClick={doThumbnail} title="훅 장면 배경에 제목·핵심을 얹은 디자인 썸네일을 새로 만듭니다(약 1분, 이미지 생성 과금)">
               {thumbBusy ? "썸네일 생성 중…" : "🖼 썸네일 생성"}
             </button>
-            {s.youtubeUrl ? (
+            {canYt && (s.youtubeUrl ? (
               <>
                 <a className="btn ghost" href={s.youtubeUrl} target="_blank" rel="noreferrer" title="비공개 업로드됨 — 공개 전환은 유튜브 스튜디오에서. 그때 커버를 '동영상 프레임' 맨 앞(0초=디자인 썸네일)으로 지정하세요">▶ 유튜브(비공개)</a>
                 {typeof s.views === "number" && (
@@ -137,14 +143,14 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
               <button className="btn ghost" disabled={ytBusy} onClick={doYoutube}>{ytBusy ? "업로드 중…" : "▶ 유튜브 업로드"}</button>
             ) : yt.client ? (
               <a className="btn ghost" href="/youtube/oauth/start" target="_blank" rel="noreferrer" title="이 브랜드의 유튜브 채널 구글 계정으로 로그인해 1회 연결">▶ 채널 연결</a>
-            ) : null}
-            {(s.igPermalink || s.fbReelId) && (
+            ) : null)}
+            {canIg && (s.igPermalink || s.fbReelId) && (
               <span style={{ display: "inline-flex", gap: 6 }}>
                 {s.igPermalink && <a className="btn ghost" href={s.igPermalink} target="_blank" rel="noreferrer">📸 릴스</a>}
                 {s.fbReelId && <a className="btn ghost" href={`https://www.facebook.com/reel/${s.fbReelId}`} target="_blank" rel="noreferrer">📘 FB 릴스</a>}
               </span>
             )}
-            {!s.igPermalink && !s.fbReelId ? (
+            {canIg && (!s.igPermalink && !s.fbReelId ? (
               metaReady || fbReady ? (
                 <button className="btn ghost" disabled={metaBusy} onClick={doMeta} title="릴스로 발행 — 릴스는 즉시 공개됩니다(연결된 채널 모두)">
                   {metaBusy ? "릴스 발행 중…" : "📤 릴스 발행(즉시 공개)"}
@@ -164,7 +170,7 @@ function ShortRow({ s, onDelete, yt, metaReady, fbReady, onChanged }: {
                 title="페이스북 릴스에 디자인 썸네일을 커버로 지정합니다(재발행 없음)">
                 {metaBusy ? "커버 적용 중…" : "🖼 페북 커버 적용"}
               </button>
-            ) : null}
+            ) : null)}
             {metaErr && <span className="muted" style={{ color: "var(--con)" }}>{metaErr}</span>}
             {ytErr && <span className="muted" style={{ color: "var(--con)" }}>{ytErr}</span>}
             {s.youtubeUrl && (
@@ -188,6 +194,7 @@ export default function ShortsSection() {
   const [topic, setTopic] = useState("");
   const [keyword, setKeyword] = useState("");
   const [scenes, setScenes] = useState(6);
+  const [platform, setPlatform] = useState<"" | "youtube" | "instagram">(""); // 빈 값 = 둘 다
   const [srcPiece, setSrcPiece] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
@@ -215,7 +222,11 @@ export default function ShortsSection() {
     const t = topic.trim();
     if (!t) return;
     setBusy(true); setErr("");
-    const r = await createShorts({ topic: t, keyword: keyword.trim() || undefined, scenes });
+    // 채널 미선택 = 둘 다(유튜브 원편 + 인스타 승계) — 블로그 파생과 같은 계약.
+    const r = await createShorts({
+      topic: t, keyword: keyword.trim() || undefined, scenes,
+      ...(platform ? { platform } : {}),
+    });
     setBusy(false);
     if (r.ok) { setTopic(""); setKeyword(""); load(); } else setErr(r.error || "생성 실패");
   };
@@ -246,6 +257,15 @@ export default function ShortsSection() {
           <label className="muted">씬&nbsp;
             <select value={scenes} onChange={(e) => setScenes(Number(e.target.value))}>
               {[4, 5, 6, 7, 8].map((n) => <option key={n} value={n}>{n}</option>)}
+            </select>
+          </label>
+          {/* 채널 — 미선택이면 둘 다 만든다(유튜브 원편 + 인스타 승계). 채널마다 대본 각도가
+              달라지므로, 한 파일을 두 곳에 올리던 종전 형태로 되돌아가지 않게 한다. */}
+          <label className="muted" title="채널마다 대본 각도가 다릅니다. '둘 다'는 유튜브편을 만들고 그 이미지를 인스타편이 승계합니다(이미지 한 벌).">채널&nbsp;
+            <select value={platform} onChange={(e) => setPlatform(e.target.value as "" | "youtube" | "instagram")}>
+              <option value="">둘 다</option>
+              <option value="youtube">유튜브만</option>
+              <option value="instagram">인스타만</option>
             </select>
           </label>
           <button className="btn start" disabled={busy || !topic.trim()} onClick={doCreate}>+ 생성</button>

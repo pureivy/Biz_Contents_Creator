@@ -39,6 +39,13 @@ export function buildI2vBody(model: string, prompt: string, imageUrl: string, su
         + (subjectHold ? ', hands moving, fingers moving, arms moving, people moving, person walking, gesturing, grabbing, cutting motion, tool moving, action progressing' : ''),
     };
   }
+  if (model.includes('veo')) {
+    // Veo 3.1 Lite — 2026-09-03 실측 검증: 1080p·4초·9:16 통과, 산출 1080×1920 24fps 96프레임 4.000초,
+    // 오디오 트랙 없음. 4초 클립은 씬 중앙값 7.6초를 0.5배속으로 채우는데(렌더러가 실측 길이로 배속 산정),
+    // 잎·빛의 미세 드리프트에는 감속이 오히려 자연스럽다. 무음 1080p 기준 초당 $0.05 → 클립당 $0.20.
+    // generate_audio=false 필수 — 켜면 요금이 1.6배가 되고 우리는 내레이션만 쓴다.
+    return { prompt, image_url: imageUrl, duration: 4, resolution: '1080p', aspect_ratio: '9:16', generate_audio: false };
+  }
   // LTX-2 계열 — 가로 전용(세로 불가 실측). env 로 명시 선택 시에만 사용(negative_prompt 필드 없음).
   return { prompt, image_url: imageUrl, duration: 6, resolution: '1080p', fps: 25, generate_audio: false };
 }

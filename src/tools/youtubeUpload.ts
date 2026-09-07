@@ -55,6 +55,16 @@ async function refreshAccessToken(clientId: string, clientSecret: string, refres
   return j.access_token;
 }
 
+/** 브랜드 채널의 액세스 토큰(공용 헬퍼) — 애널리틱스 수집 등 업로드 외 경로에서 재사용. */
+export async function youtubeAccessToken(slug: string, signal?: AbortSignal): Promise<string> {
+  const clientId = getSecret('YOUTUBE_OAUTH_CLIENT_ID') ?? '';
+  const clientSecret = getSecret('YOUTUBE_OAUTH_CLIENT_SECRET') ?? '';
+  if (!clientId || !clientSecret) throw new Error('유튜브 OAuth 클라이언트 미설정');
+  const { refreshToken } = getYoutubeAccount(slug);
+  if (!refreshToken) throw new Error('유튜브 채널 미연결');
+  return refreshAccessToken(clientId, clientSecret, refreshToken, signal);
+}
+
 export async function uploadShortsToYoutube(opts: {
   slug: string; videoPath: string;
   title: string; description: string; hashtags: string[];

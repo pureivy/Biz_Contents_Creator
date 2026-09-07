@@ -131,12 +131,15 @@ export async function packageNaverBlog(input: FormatterInput): Promise<AssetBund
 /**
  * 초안 → 세션 파일 목록(draft.json/md/html + image-prompts.md). 슬롯이 갱신되면(디자이너 협의) 재호출해 동기화.
  * imagesReady=true 면 draft.html 이 세션 images/blog-image-0N.png 를 <img> 로 참조(이미지 실생성 런).
+ * readySlots 를 주면 그 슬롯만 <img>, 나머지는 자리표시 — 생성 후 실제 파일로 재렌더할 때 쓴다.
  */
-export function draftFiles(draft: BlogDraft, imagesReady = false): Array<{ name: string; content: string }> {
+export function draftFiles(
+  draft: BlogDraft, imagesReady = false, readySlots?: ReadonlySet<number>,
+): Array<{ name: string; content: string }> {
   const files = [
     { name: 'draft.json', content: JSON.stringify(draft, null, 2) },
     { name: 'draft.md', content: renderMarkdown(draft) },
-    { name: 'draft.html', content: renderHtml(draft, { imagesReady }) },
+    { name: 'draft.html', content: renderHtml(draft, { imagesReady, readySlots }) },
   ];
   if (draft.imageSlots.length) {
     files.push({ name: 'image-prompts.md', content: draft.imageSlots.map((s, i) => `${i + 1}. **${s.alt}**\n   ${s.prompt}`).join('\n\n') });

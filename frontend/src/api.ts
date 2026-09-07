@@ -373,17 +373,17 @@ export async function retryClassify(refs: string[]): Promise<number | null> {
 export interface SkippedAttachment { file: string; reason: string }
 export async function uploadRunAttachments(
   files: File[],
-): Promise<{ ok: boolean; images: string[]; docs: string[]; skipped: SkippedAttachment[]; error?: string }> {
+): Promise<{ ok: boolean; images: string[]; videos: string[]; docs: string[]; skipped: SkippedAttachment[]; error?: string }> {
   const fd = new FormData();
   for (const f of files) fd.append("files", f);
   try {
     const r = await fetch("/runs/attachments", { method: "POST", body: fd });
-    const j = (await r.json().catch(() => ({}))) as { images?: string[]; docs?: string[]; skipped?: SkippedAttachment[]; error?: string };
-    if (!r.ok) return { ok: false, images: [], docs: [], skipped: j.skipped ?? [], error: j.error };
+    const j = (await r.json().catch(() => ({}))) as { images?: string[]; videos?: string[]; docs?: string[]; skipped?: SkippedAttachment[]; error?: string };
+    if (!r.ok) return { ok: false, images: [], videos: [], docs: [], skipped: j.skipped ?? [], error: j.error };
     // skipped: 서버가 용량·형식·개수 상한으로 제외한 파일 — 호출부가 사용자에게 고지하고 계속 여부를 묻는다.
-    return { ok: true, images: j.images ?? [], docs: j.docs ?? [], skipped: j.skipped ?? [] };
+    return { ok: true, images: j.images ?? [], videos: j.videos ?? [], docs: j.docs ?? [], skipped: j.skipped ?? [] };
   } catch {
-    return { ok: false, images: [], docs: [], skipped: [], error: "network" };
+    return { ok: false, images: [], videos: [], docs: [], skipped: [], error: "network" };
   }
 }
 
@@ -809,9 +809,13 @@ export async function ttsFetch(text: string, voice?: string): Promise<Blob | nul
 export type PieceStage =
   | "idea" | "research" | "draft" | "ready" | "published" | "measured" | "reflected" | "error";
 /** 파생 콘텐츠 요약(카드뉴스·숏폼) — 콘텐츠 세트 상태를 캘린더 배지·검토 미리보기·성과 컬럼에 표시. */
+export interface DerivedShorts { id: string; stage: string; durationSec?: number; running: boolean; platform?: "youtube" | "instagram" }
 export interface DerivedSummary {
   cardnews?: { id: string; stage: string; slides?: number; running: boolean };
-  shorts?: { id: string; stage: string; durationSec?: number; running: boolean };
+  /** 최신 1건(하위호환 — 캘린더 배지·성과 컬럼). 채널 분리 후 전체는 shortsList. */
+  shorts?: DerivedShorts;
+  /** 글당 숏폼 전체(2026-09-03 채널 분리: 유튜브용·인스타용). 구 서버 응답이면 없다. */
+  shortsList?: DerivedShorts[];
 }
 export interface PieceInfo {
   id: string;
@@ -824,6 +828,8 @@ export interface PieceInfo {
   publishedTs?: string; // 발행 시각 — 검토 탭 발행 이후 그룹의 안정 정렬 축(서버는 늘 내려주고 있었음)
   naverDraftUrl?: string;
   naverDraftTs?: string;
+  /** 비공개로 실제 발행됐을 때의 글 주소(logNo=…). 임시저장 폴백이면 없다 — 링크 문구를 가르는 기준. */
+  privateUrl?: string;
   seoScore?: number;
   errors?: number;
   derived?: DerivedSummary;
@@ -907,11 +913,13 @@ export async function fetchPieceMetrics(id: string): Promise<MetricSample[]> {
   try { const r = await fetch(`/pieces/${id}/metrics`); if (!r.ok) return []; return (await r.json()).metrics ?? []; }
   catch { return []; }
 }
-// 네이버 임시저장(검토 탭) — 서버가 백그라운드 잡으로 Playwright 임시저장을 수행. 상태는 폴링으로 확인.
+// 네이버 비공개 발행(검토 탭) — 서버가 백그라운드 잡으로 Playwright 발행을 수행. 상태는 폴링으로 확인.
 export interface NaverDraftStatus {
   status: "idle" | "running" | "saved" | "failed";
   url?: string; admin_url?: string; error?: string; dry_run?: boolean;
   started_ts?: string; ended_ts?: string;
+  /** 비공개로 실제 발행됐는가 — false 면 임시저장 폴백이라 사용자가 갈 곳이 다르다. */
+  private_published?: boolean;
 }
 export async function startNaverDraft(id: string, dryRun = false): Promise<{ ok: boolean; error?: string }> {
   try {
@@ -957,7 +965,17 @@ export interface PerfRow {
 // stale = 미반영인데 수집 대상에서도 빠진 상태(비공개·삭제·포기 지평 경과) → '측정 중'이 아니라 '수집 불가'.
 export interface ShortsPerfRow {
   id: string; title: string; ts: string;
-  youtube: { url: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
+  youtube: {
+    url: string | null; views: number | null; likes: number | null;
+    reflected: boolean; stale: boolean; series: number[]; ts: string;
+    /** 평균 시청 비율(%) — 반복 재생이 있으면 100 을 넘는다. 애널리틱스 집계 전이면 null. */
+    avgViewPct?: number | null;
+    /** 쇼츠 피드 유입 비중(0~1) — 낮으면 피드에 안 뿌려진 것이다. */
+    feedShare?: number | null;
+    measuredAt?: string | null;
+    /** 이 편으로 들어온 유튜브 검색어(조회 많은 순) — 다음 주제를 고르는 근거. */
+    inflow?: Array<{ keyword: string; count: number }>;
+  } | null;
   meta: { permalink: string | null; views: number | null; likes: number | null; reflected: boolean; stale: boolean; series: number[]; ts: string } | null;
   // 페북 릴스 — 미게시면 null. coverPending 이면 커버(썸네일) 미적용 상태.
   fb: { url: string; views: number | null; likes: number | null; series: number[]; ts: string | null; coverPending: boolean } | null;
@@ -968,8 +986,10 @@ export interface CardnewsPerfRow {
   fb: { url: string; likes: number | null; shares: number | null; series: number[]; ts: string | null } | null; // series = 좋아요 추이(FB 게시물은 조회 미제공)
 }
 export interface PerfData {
-  /** 새로고침 백그라운드 재수집 진행 중 여부 — true 면 프론트가 폴링으로 완료를 기다린다. */
+  /** 빠른 갱신(유튜브·릴스·카드뉴스) 진행 중 — true 면 프론트가 폴링으로 완료를 기다린다. */
   refreshBusy?: boolean;
+  /** 네이버 수집 또는 다른 네이버 브라우저 작업(임시저장 등) 진행 중 — 수 분~30분. 별도 폴링 대상. */
+  naverBusy?: boolean;
   strategy: {
     winners: Array<{ keyword: string; score: number; samples: number }>; subNiches: Record<string, number>; measuredPieces: number;
     /** 채널 학습(쇼츠·릴스·카드뉴스) — 직원 강화가 남긴 교훈 문장(위키 performance 페이지 요약). */
@@ -980,6 +1000,8 @@ export interface PerfData {
   channels?: {
     shorts: ShortsPerfRow[];
     cardnews: CardnewsPerfRow[];
+    /** 페이스북을 채널로 셀 것인가(서버 CONFIG.fbAsChannel) — false 면 페북 열·카드를 접는다. */
+    fbAsChannel?: boolean;
     summary: {
       shortsYtViews: number; reelsViews: number; cardnewsViews: number; fbReelViews: number;
       ytLikes: number; reelsLikes: number; cardnewsLikes: number; fbReelLikes: number; fbPostLikes: number;
@@ -1016,11 +1038,25 @@ export async function fetchTitleTiming(): Promise<TitleTimingReport | null> {
   try { const r = await fetch("/api/analytics/title-timing"); return r.ok ? await r.json() : null; }
   catch { return null; }
 }
-/** 채널 성과 즉시 재수집 시작(쇼츠 유튜브·릴스·카드뉴스 API + 네이버 일일 추적) — 서버는 백그라운드로
- *  돌리고 즉시 응답한다(started=시작, busy=이미 진행 중). 완료는 fetchPerformance().refreshBusy 로 폴링. */
+/** 빠른 갱신 시작(쇼츠 유튜브·릴스·카드뉴스 — 전부 순수 API, 실측 96초) — 서버는 백그라운드로 돌리고
+ *  즉시 응답한다(started=시작, busy=이미 진행 중). 완료는 fetchPerformance().refreshBusy 로 폴링.
+ *  네이버는 여기 없다 — 브라우저를 쓰고 30분 걸려 별도 경로로 분리했다(2026-08-31). */
 export async function refreshPerformance(): Promise<{ ok: boolean; started?: boolean; busy?: boolean; error?: string }> {
   try {
     const r = await fetch("/performance/refresh", { method: "POST" });
+    if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
+    return await r.json();
+  } catch {
+    return { ok: false, error: "network" };
+  }
+}
+
+/** 네이버 성과 수집 시작 — 글마다 헤드리스 브라우저로 통계를 읽어 수 분~30분. 평소엔 새벽 자동 1회로
+ *  충분하고, 이 수동 경로는 그 자동 수집이 실패한 날의 복구 수단이다. 완료는 naverBusy 로 폴링.
+ *  ok=false + note = 다른 네이버 브라우저 작업(임시저장 등)이 프로필을 쓰는 중이라 시작하지 않음. */
+export async function refreshNaverPerformance(): Promise<{ ok: boolean; started?: boolean; busy?: boolean; note?: string; error?: string }> {
+  try {
+    const r = await fetch("/performance/refresh/naver", { method: "POST" });
     if (!r.ok) { const e = await r.json().catch(() => ({} as { error?: string })); return { ok: false, error: e.error }; }
     return await r.json();
   } catch {
@@ -1103,6 +1139,8 @@ export async function deleteCardNews(id: string, opts?: { purge?: boolean }): Pr
 export type ShortsStage = "planning" | "designing" | "rendering" | "ready" | "error";
 export interface ShortsInfo {
   id: string;
+  /** 발행 대상 채널(2026-09-03 분리) — 없으면 레거시(양 채널 겸용). */
+  platform?: "youtube" | "instagram";
   topic: string;
   keyword?: string;
   sourcePieceId?: string;
@@ -1115,6 +1153,8 @@ export interface ShortsInfo {
   scenes?: number;
   bgFallbacks?: number;
   writer?: string;
+  /** 작가 필명 id(2026-09-03) — 아바타 얼굴 해석용. 레거시 편은 없다. */
+  writerId?: string;
   director?: string;
   error?: string;
   youtubeUrl?: string;
@@ -1131,7 +1171,7 @@ export async function fetchShorts(): Promise<ShortsInfo[]> {
   try { const r = await fetch("/shorts"); if (!r.ok) return []; return (await r.json()).shorts ?? []; }
   catch { return []; }
 }
-export async function createShorts(body: { topic: string; keyword?: string; scenes?: number }): Promise<{ ok: boolean; id?: string; error?: string }> {
+export async function createShorts(body: { topic: string; keyword?: string; scenes?: number; platform?: "youtube" | "instagram" }): Promise<{ ok: boolean; id?: string; error?: string }> {
   try {
     const r = await fetch("/shorts", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
     const j = await r.json().catch(() => ({} as { short?: { id: string }; error?: string }));
@@ -1210,4 +1250,14 @@ export async function runPiece(id: string): Promise<{ ok: boolean; run_id?: stri
     const j = await r.json().catch(() => ({} as { run_id?: string; error?: string }));
     return r.ok ? { ok: true, run_id: j.run_id } : { ok: false, error: j.error || `HTTP ${r.status}` };
   } catch { return { ok: false, error: "network" }; }
+}
+
+// 숏폼 작가 페르소나(2026-09-03) — shorts_writer 역할의 필명·문체·목소리. 조직도(역할)와 다른 층위라 따로 읽는다.
+export interface ShortsWriterInfo { id: string; name: string; voiceNote: string; styleGuide: string; recentCount: number }
+export async function fetchShortsWriters(): Promise<{ writers: ShortsWriterInfo[]; recentTotal: number }> {
+  try {
+    const r = await fetch("/shorts/writers");
+    if (!r.ok) return { writers: [], recentTotal: 0 };
+    return await r.json();
+  } catch { return { writers: [], recentTotal: 0 }; }
 }

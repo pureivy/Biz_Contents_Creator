@@ -176,3 +176,64 @@ describe('브랜드 슬러그 FS 경계 방어(defense-in-depth)', () => {
     expect(await collectNaverMetrics('https://blog.naver.com/x/1', runDir, { brand: '../evil' })).toBeNull();
   });
 });
+
+// 실사고(2026-08-31): .env 의 BLOG_PYTHON 이 삭제된 Desktop 사본을 가리켜 naver_stats.py 가 실행조차
+// 안 됐는데, runScript 가 돌려준 진짜 사유("스크립트/인터프리터 없음: …")를 parseStatsOutput 이 버리고
+// null 로 만들었다. 그 결과 성과탭 새로고침이 94개 글에 "표본 없음(발행 초기 집계 지연 가능)" 만 남겨
+// 설정 오류가 '데이터가 아직 없음'으로 읽혔다. 아침의 claude CLI 건과 같은 부류 — 원인 삼킴.
+describe('blogSkillProblem — 블로그 스킬 사전 점검', () => {
+  it('BLOG_PYTHON 미설정이면 사유를 돌려준다', async () => {
+    const { blogSkillProblem } = await import('./blog_skills');
+    expect(blogSkillProblem('naver_stats.py', '', '/any/dir')).toMatch(/BLOG_PYTHON/);
+  });
+
+  it('인터프리터 경로가 없으면 그 경로를 사유에 담는다', async () => {
+    const { blogSkillProblem } = await import('./blog_skills');
+    const why = blogSkillProblem('naver_stats.py', '/nonexistent/python', '/nonexistent/dir');
+    expect(why).toContain('/nonexistent/python');
+  });
+
+  it('인터프리터는 있고 스크립트만 없으면 스크립트 경로를 사유에 담는다', async () => {
+    const { blogSkillProblem } = await import('./blog_skills');
+    const why = blogSkillProblem('naver_stats.py', '/bin/sh', '/nonexistent/dir');
+    expect(why).toContain('naver_stats.py');
+  });
+
+  it('인터프리터·스크립트가 모두 있으면 null(문제 없음)', async () => {
+    const { blogSkillProblem } = await import('./blog_skills');
+    // /bin/sh 를 인터프리터로, /bin/echo 가 있는 /bin 을 스크립트 디렉토리로 삼아 존재성만 확인한다.
+    expect(blogSkillProblem('echo', '/bin/sh', '/bin')).toBeNull();
+  });
+});
+
+// 같은 실사고의 2차 원인 — RESULT_JSON 이 없는 출력을 통째로 null 로 만들어 실패 사유가 증발했다.
+// 호출부(measurePiece)는 null 을 받으면 '수집 결과 파싱 실패'라는 자체 문구로 덮어써서, 스크립트가
+// 아예 실행되지 않았다는 사실이 어디에도 남지 않았다.
+describe('statsResultFrom — 수집 실패 사유 보존', () => {
+  it('RESULT_JSON 이 있으면 종전대로 파싱한다', async () => {
+    const { statsResultFrom } = await import('./blog_skills');
+    const r = statsResultFrom({ ok: true, output: 'RESULT_JSON: {"views":137,"source":"scrape:naver_advisor"}' });
+    expect(r?.views).toBe(137);
+    expect(r?.source).toBe('scrape:naver_advisor');
+  });
+
+  it('스크립트가 실패했고 RESULT_JSON 도 없으면 사유를 note 에 실어 돌려준다', async () => {
+    const { statsResultFrom } = await import('./blog_skills');
+    const r = statsResultFrom({ ok: false, output: '(파이썬 인터프리터 없음: /gone/python (.env 의 BLOG_PYTHON 확인))' });
+    expect(r).not.toBeNull();
+    expect(r!.views).toBe(0);
+    expect(r!.searchInflow).toEqual([]);
+    expect(r!.note).toContain('/gone/python');
+  });
+
+  it('정상 종료인데 RESULT_JSON 만 없으면 null(종전 동작 — 데이터 없음)', async () => {
+    const { statsResultFrom } = await import('./blog_skills');
+    expect(statsResultFrom({ ok: true, output: '로그인 필요' })).toBeNull();
+  });
+
+  it('실패 사유가 길어도 note 는 잘려서 담긴다(로그 폭주 방지)', async () => {
+    const { statsResultFrom } = await import('./blog_skills');
+    const r = statsResultFrom({ ok: false, output: 'x'.repeat(5000) });
+    expect(r!.note!.length).toBeLessThanOrEqual(300);
+  });
+});

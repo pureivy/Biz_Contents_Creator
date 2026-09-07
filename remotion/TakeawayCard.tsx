@@ -1,5 +1,6 @@
 import React from 'react';
-import { AbsoluteFill, useCurrentFrame, interpolate } from 'remotion';
+import { AbsoluteFill, useCurrentFrame, useVideoConfig, interpolate } from 'remotion';
+import { popIn } from './anim';
 
 /**
  * CTA 씬 결론 오버레이(2026-08-28 사용자 요청) — "무얼 심어라"를 화면에 띄운다.
@@ -18,6 +19,7 @@ export const TakeawayCard: React.FC<{
   total: number;
 }> = ({ takeaways, total }) => {
   const f = useCurrentFrame();
+  const { fps } = useVideoConfig();
   // 카드 자체는 씬 시작 직후 뜨고, 항목은 차례로 얹힌다 — 내레이션이 항목을 하나씩 말하는 속도에 맞춘다.
   const inP = interpolate(f, [0, 12], [0, 1], { extrapolateLeft: 'clamp', extrapolateRight: 'clamp' });
   const rows = takeaways.slice(0, 3);
@@ -33,16 +35,15 @@ export const TakeawayCard: React.FC<{
         }}
       >
         {rows.map((t, i) => {
-          const p = interpolate(f, [12 + i * stagger, 12 + i * stagger + 10], [0, 1], {
-            extrapolateLeft: 'clamp', extrapolateRight: 'clamp',
-          });
+          const p = popIn(f, fps, 12 + i * stagger); // 스프링 — 조건→답 한 줄씩 얹히는 리듬
+          const o = Math.min(1, p);
           return (
             <div
               key={i}
               style={{
                 background: 'rgba(0,0,0,.52)', borderRadius: 22, padding: '24px 34px',
                 display: 'flex', alignItems: 'center', gap: 18, flexWrap: 'wrap',
-                opacity: p, transform: `translateY(${(1 - p) * 20}px)`,
+                opacity: o, transform: `translateY(${(1 - p) * 20}px)`,
                 textShadow: '0 3px 16px rgba(0,0,0,.65)',
               }}
             >

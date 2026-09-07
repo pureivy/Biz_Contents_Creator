@@ -154,6 +154,20 @@ export interface Config {
   readonly shortsPerfDays: number;
   /** 쇼츠 총 길이 상한(초) — 대본 자수 예산·씬 수를 여기서 역산(사용자 확정 2026-08-14: 60초 이내). */
   readonly shortsMaxDurationSec: number;
+  /** 유튜브 하루 업로드 상한(2026-09-03, 사용자 확정 1편) — 0 이하면 상한 없음. 인스타는 적용하지 않는다. */
+  readonly youtubeDailyCap: number;
+  /** 페이스북을 성과 지표에서 채널로 셀 것인가(기본 off — 위 구현부 주석 참조). */
+  readonly fbAsChannel: boolean;
+  /**
+   * 자율런이 채널당 하루에 만드는 편수 상한 — 채널마다 따로 둔다(2026-09-03).
+   *
+   * 하나로 묶었다가 쪼갠 이유는 두 채널의 성과 분포가 다르기 때문이다(실측 108편):
+   * 유튜브는 최대가 중앙값의 2배로 천장이 단단하고(2,000회 이상 1편), 인스타는 31배까지 벌어지는
+   * 긴 꼬리다(2,000회 이상 19편·17%). 유튜브는 더 올려도 안 퍼지고, 인스타는 편수가 곧 복권 장수다.
+   *
+   * 직접 지시한 생성에는 적용되지 않는다 — 자동으로 도는 것만 조인다. 0 이면 상한 없음.
+   */
+  readonly shortsAutoDailyCap: { readonly youtube: number; readonly instagram: number };
   /** 쇼츠 자막 하단 여백(%) — 플랫폼 UI 가림 회피용 위치 조정(5~60 클램프). */
   readonly shortsCaptionBottomPct: number;
   /** 쇼츠 자막 글자 크기(px) — 일반 씬(훅 제외). */
@@ -237,6 +251,7 @@ export interface Config {
   readonly contentReadyCap: number;
   /** 일일 성과 동기화 시각 "HH:MM"(로컬). 빈 문자열=off. 등록된 수집기로 발행 piece 성과를 측정→강화(수집기 미설정 시 no-op). */
   readonly performanceSyncTime: string;
+  readonly naverSyncTime: string;
   /** 발행 후 성과 측정까지 대기일 — 네이버 트래픽이 축적될 시간(콜드스타트 지연). 이 창 도달 전 piece 는 측정 안 함. */
   readonly performanceWindowDays: number;
   /** 주입 지식(injected.md) 반영 한도(자 수) — 에이전트 매 런 시스템프롬프트에 들어가는 양. 초과분은 최신 우선(tail)로 잘림. */
@@ -345,6 +360,20 @@ export const CONFIG: Config = {
   autoYtUpload: envBool('AUTO_YT_UPLOAD', false),
   shortsPerfDays: Math.max(1, envInt('SHORTS_PERF_DAYS', 7)),
   shortsMaxDurationSec: Math.min(180, Math.max(20, envInt('SHORTS_MAX_DURATION_SEC', 60))),
+  // 대량생산 신호를 줄이는 쪽이 목적이라 기본 1편. 인스타는 막히지 않았고 성과가 나는 채널이라 제외한다.
+  youtubeDailyCap: envInt('YOUTUBE_DAILY_CAP', 1),
+  // 페이스북을 '채널'로 셀 것인가(2026-09-04 사용자 확정: 아니오).
+  // 실측: 릴스 110편 두 달 합계 291회(편당 중앙 2회), 같은 영상의 인스타는 150,961회 — 520배.
+  // 원인은 배포가 아니라 페이지다. 팬 0·팔로워 0 — 이 페이지는 인스타 Graph API 를 쓰려면
+  // 연결된 페이지가 필수라서 만든 부속물이고, 채널로 운영한 적이 없다.
+  // 게시는 그대로 둔다(비용 0, 나중에 키우기로 하면 쌓인 편이 자산이다). 성과 지표에서만 뺀다 —
+  // 0 인 숫자가 다른 채널과 나란히 서 있으면 "채널 하나가 죽었다"로 읽혀 판단을 흐린다.
+  fbAsChannel: envBool('FB_AS_CHANNEL', false),
+  // 채널별 키가 없으면 종전 통합 키(SHORTS_AUTO_DAILY_CAP)로 떨어진다 — 기존 설정이 그대로 산다.
+  shortsAutoDailyCap: {
+    youtube: envInt('YOUTUBE_AUTO_DAILY_CAP', envInt('SHORTS_AUTO_DAILY_CAP', 1)),
+    instagram: envInt('INSTAGRAM_AUTO_DAILY_CAP', envInt('SHORTS_AUTO_DAILY_CAP', 1)),
+  },
   // 자막 하단 여백(%) — 유튜브 쇼츠·릴스 하단 UI(~25%)에 안 가리는 안전 영역. 기본 32 + 키워드 강조색
   // = 사용자 A/B/C/D 비교 후 C안 확정(2026-07-30). 종전(20·무강조)으로 되돌리려면 env 로 조정.
   shortsCaptionBottomPct: Math.min(60, Math.max(5, envInt('SHORTS_CAPTION_BOTTOM_PCT', 50))),
@@ -402,6 +431,10 @@ export const CONFIG: Config = {
   contentCadencePerWeek: Math.max(1, envInt('CONTENT_CADENCE_PER_WEEK', 3)),
   contentReadyCap: Math.max(1, envInt('CONTENT_READY_CAP', 5)),
   performanceSyncTime: env('PERFORMANCE_SYNC_TIME', '').trim(),
+  // 네이버 성과 수집 시각(사용자 결정 2026-08-31) — 헤드리스 크롬으로 글마다 통계를 열어 30분쯤
+  // 걸리고 그동안 프로필을 점유해 임시저장이 막힌다. 사람이 안 쓰는 새벽에 하루 1회만 돈다
+  // (네이버 통계 자체가 일 단위 집계라 더 자주 볼 이유도 없다). 빈값=off.
+  naverSyncTime: env('NAVER_SYNC_TIME', '03:00').trim(),
   performanceWindowDays: Math.max(0, envInt('PERFORMANCE_WINDOW_DAYS', 14)),
   injectedKnowledgeCap: Math.max(500, envInt('INJECTED_KNOWLEDGE_CAP', 10000)),
   topicDemandGate: envBool('TOPIC_DEMAND_GATE', true),

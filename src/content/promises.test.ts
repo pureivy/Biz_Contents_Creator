@@ -106,11 +106,13 @@ describe('PromiseStore.expire — 만료 자동 청소', () => {
   const tmp = (): string => fs.mkdtempSync(path.join(os.tmpdir(), 'promises-exp-'));
   const d = (iso: string): Date => new Date(`${iso}T03:00:00Z`); // KST 정오 — 경계 애매함 회피
 
-  /** 등록 시각을 과거로 되돌린 스토어 — 실제 백로그(7월 말 등록)를 재현한다. */
-  const storeCreatedAt = (createdIso: string, windows: string[]): PromiseStore => {
+  /** 등록 시각을 과거로 되돌린 스토어 — 실제 백로그(7월 말 등록)를 재현한다.
+   *  topicOf 로 주제를 달리 줄 수 있다 — create 가 같은 주제를 거절하므로 같은 창을 여러 건 만들 때 필요하다. */
+  const storeCreatedAt = (createdIso: string, windows: string[],
+    topicOf: (w: string, i: number) => string = (w) => `주제 ${w}`): PromiseStore => {
     const dir = tmp();
     const s0 = new PromiseStore(dir);
-    for (const w of windows) s0.create({ topic: `주제 ${w}`, window: w, sourceKind: 'shorts', brand: 'b' });
+    windows.forEach((w, i) => { s0.create({ topic: topicOf(w, i), window: w, sourceKind: 'shorts', brand: 'b' }); });
     const file = path.join(dir, 'index.json');
     const raw = JSON.parse(fs.readFileSync(file, 'utf-8')) as Array<{ createdTs: string }>;
     for (const r of raw) r.createdTs = createdIso;
@@ -118,14 +120,17 @@ describe('PromiseStore.expire — 만료 자동 청소', () => {
     return new PromiseStore(dir);
   };
 
+  // 등록 시각을 반드시 고정한다 — create() 는 createdTs 에 **실제 현재 시각**을 넣는데, 만료 기준이
+  // '등록 후 처음 오는 도래'라 등록 달이 바뀌면 첫 창이 이듬해로 밀린다. 종전엔 그냥 create() 를 쓰고
+  // 창을 '8월'로 고정해 뒀는데, 그건 실제 시계가 8월 이하일 때만 통과하는 테스트였다.
+  // 실측: 09-01 로 날짜가 넘어가자 두 건이 깨졌다(9월 등록 + '8월' 창 → 첫 창이 2027-08-01 로 밀림).
   it('유예 기간이 지난 pending 을 dropped 로 비운다', () => {
-    const s = new PromiseStore(tmp());
-    const p = s.create({ topic: '8월 소재', window: '8월', sourceKind: 'shorts', brand: 'b' })!;
+    const s = storeCreatedAt('2026-08-05T00:00:00.000Z', ['8월']);
     // 8/1 도래 + 90일(창 60 + 유예 30) → 10월 말 이후 만료
     expect(s.expire('b', d('2026-10-01'))).toEqual([]);       // 아직 유예 안
     const gone = s.expire('b', d('2026-11-15'));
-    expect(gone.map((x) => x.id)).toEqual([p.id]);
-    expect(s.get(p.id)!.status).toBe('dropped');
+    expect(gone.map((x) => x.topic)).toEqual(['주제 8월']);
+    expect(s.list().every((x) => x.status === 'dropped')).toBe(true);
   });
 
   // 실사고(2026-08-28) — 첫 자율 틱이 9·10·11월 약속 8건을 "창 경과"로 통째 폐기했다. 원인은 기준 시각을
@@ -185,8 +190,9 @@ describe('PromiseStore.expire — 만료 자동 청소', () => {
   });
 
   it('만료로 슬롯이 비면 새 예고가 다시 등록된다 — 이 기능의 존재 이유', () => {
-    const s = new PromiseStore(tmp());
-    for (let i = 0; i < MAX_PENDING; i++) s.create({ topic: `묵은 주제 ${i}`, window: '8월', sourceKind: 'shorts', brand: 'b' });
+    // 등록 시각 고정 — 위와 같은 이유(실제 시계가 8월을 넘기면 첫 창이 이듬해로 밀려 만료가 안 된다).
+    const s = storeCreatedAt('2026-08-05T00:00:00.000Z', Array.from({ length: MAX_PENDING }, () => '8월'),
+      (_w, i) => `묵은 주제 ${i}`); // 주제가 같으면 create 가 중복으로 거절해 만석이 안 된다
     const late = d('2026-12-01');
     expect(s.create({ topic: '새 예고', window: '12월', sourceKind: 'shorts', brand: 'b' })).toBeNull(); // 만석
     expect(s.expire('b', late)).toHaveLength(MAX_PENDING);

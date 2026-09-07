@@ -8,7 +8,7 @@
 import { CONFIG } from '../config';
 import { getSecret, getMetaAccount } from '../secrets/store';
 import { fetchTimeout } from '../util/fetch';
-import { appendMetrics, readMetrics, type MetricSample } from './performance';
+import { appendMetrics, readMetrics, topInflow, type MetricSample, type SearchInflow } from './performance';
 import { shortsStore, type Shorts } from '../content/shorts';
 import { isSafeBrandSlug, activeBrandSlug, getBrand } from '../content/brand';
 import { llmWikiFor } from '../wiki/llmwiki';
@@ -17,6 +17,7 @@ import { pieceStore } from '../content/pieces';
 import { GRAPH, FB_GRAPH } from '../tools/metaPublish';
 // cardnewsPerf ↔ shortsPerf 순환 — 함수 선언만이라 안전(최상위 상호 호출 없음)
 import { cardnewsSignal, parseIgInsights } from './cardnewsPerf';
+import { fetchVideoAnalytics, shortsFeedShare, ymd, isAuthError, hasMeasurement, ANALYTICS_LAG_DAYS } from './ytAnalytics';
 
 export interface VideoStats { views: number; likes: number; comments: number }
 
@@ -165,6 +166,65 @@ function reinforceShorts(s: Shorts, m: MetricSample): number {
   return signal;
 }
 
+/**
+ * 인스타 릴스의 (제목·키워드, 조회수) — 축 성적 계산의 입력(2026-09-04).
+ * 유튜브가 아니라 인스타를 쓰는 이유는 igAxis 헤더 참조(유튜브 피드는 신호가 끊겼다).
+ */
+export function igReelViews(brand: string | undefined): Array<{ text: string; views: number }> {
+  const slug = brand ?? '';
+  const out: Array<{ text: string; views: number }> = [];
+  for (const s of shortsStore().list()) {
+    if ((s.brand ?? '') !== slug || !s.igReelId) continue;
+    try {
+      const v = latestSampleViews(readMetrics(s.id), 'meta:ig');
+      if (v === null) continue;
+      out.push({ text: `${s.title ?? ''} ${s.topic ?? ''} ${s.keyword ?? ''}`, views: v });
+    } catch { /* 이 편만 건너뛴다 */ }
+  }
+  return out;
+}
+
+/** 소스별 최신 표본의 조회수(없으면 null) — 축 성적은 '최종 도달'을 보므로 최대가 아니라 최신을 쓴다. */
+function latestSampleViews(samples: ReadonlyArray<MetricSample>, source: string): number | null {
+  let best: { at: number; v: number } | null = null;
+  for (const m of samples) {
+    if (m?.source !== source) continue;
+    const at = Date.parse(String(m.measuredAt ?? ''));
+    if (!Number.isFinite(at)) continue;
+    const v = Number(m.views);
+    if (!Number.isFinite(v)) continue;
+    if (!best || at > best.at) best = { at, v };
+  }
+  return best ? best.v : null;
+}
+
+/**
+ * 브랜드 쇼츠의 편별 유튜브 검색어를 모은다 — 주제 제안이 실측 수요를 보게 하는 입구(2026-09-04).
+ * 표본이 없으면 빈 배열(fail-open) — 수집 전이거나 애널리틱스 집계 전이면 신호 없이 종전대로 돈다.
+ */
+export function shortsSearchTerms(
+  brand: string | undefined,
+): Array<{ terms: SearchInflow[]; subject: string; searchViews: number }> {
+  const slug = brand ?? '';
+  const out: Array<{ terms: SearchInflow[]; subject: string; searchViews: number }> = [];
+  for (const s of shortsStore().list()) {
+    if ((s.brand ?? '') !== slug || !s.youtubeId) continue;
+    // 애널리틱스를 아직 못 받은 편은 '0 유입'이 아니라 '모름' — 채점 대상에서 뺀다.
+    // 이 구분이 없으면 신작이 전부 '못 먹은 소재'로 잡혀 각도를 바꾸라는 잘못된 신호가 된다.
+    try {
+      const samples = readMetrics(s.id);
+      if (!lastAnalyticsAt(samples)) continue;
+      const terms = topInflow(samples, 10);
+      out.push({
+        terms,
+        subject: (s.keyword ?? '').trim(),
+        searchViews: terms.reduce((a, t) => a + (Number(t.count) || 0), 0),
+      });
+    } catch { /* 이 편만 건너뛴다 */ }
+  }
+  return out;
+}
+
 /** 일일 쇼츠 성과 동기화 — perf-sync 틱에서 piece 동기화와 나란히 호출(Task 3). */
 export async function syncShortsPerformance(opts: { force?: boolean } = {}): Promise<void> {
   try {
@@ -193,7 +253,100 @@ export async function syncShortsPerformance(opts: { force?: boolean } = {}): Pro
         }
       } catch (e) { console.log('[perf-sync]', `쇼츠 ${s.id} 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
     }
+    await collectShortsAnalytics(due, now, days);
   } catch (e) { console.log('[perf-sync]', `쇼츠 동기화 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
+}
+
+/** 애널리틱스 수집 대상 상한 — 영상당 요청 2회라 force 전량 재수집 때 폭주하지 않게 최근분만. */
+export const ANALYTICS_MAX_VIDEOS = 30;
+/** 상한 중 '최신 우선'에 쓰는 몫. 나머지는 오래 못 받은 구작을 순환 수집한다. */
+export const ANALYTICS_RECENT_SLOTS = 20;
+
+/** 이 편이 애널리틱스를 마지막으로 받은 시각(ms). 한 번도 없으면 0(순수). */
+export function lastAnalyticsAt(samples: ReadonlyArray<{ measuredAt?: string; source?: string }>): number {
+  let best = 0;
+  for (const m of samples) {
+    if (m?.source !== 'youtube:analytics') continue;
+    const t = Date.parse(String(m.measuredAt ?? ''));
+    if (Number.isFinite(t) && t > best) best = t;
+  }
+  return best;
+}
+
+/**
+ * 이번 틱에 애널리틱스를 받을 편 고르기(순수, 2026-09-04).
+ *
+ * 종전엔 '최근 30편'만 잘라 썼다. 그래서 그보다 오래된 편은 영영 수집되지 않았고, 실제로 이
+ * 채널 최대 검색 수요(하스카프베리묘목 551회, 8월 중순 편)가 통째로 안 보였다 — 검색어를
+ * 주제 선정에 쓰기로 한 이상 그 공백은 그대로 판단 공백이 된다.
+ *
+ * 그렇다고 전량 수집은 API 왕복이 편당 3회라 부담이다. 그래서 상한은 두되 몫을 나눈다:
+ * 앞쪽은 최신(숫자가 아직 움직이는 편 — 강화 학습이 이걸 본다), 나머지는 '가장 오래 못 받은'
+ * 구작. 109편 기준 나흘이면 한 바퀴 돌고, 그 뒤로는 계속 갱신된다.
+ */
+export function pickAnalyticsTargets(
+  list: readonly Shorts[], lastAt: (id: string) => number,
+  max = ANALYTICS_MAX_VIDEOS, recentSlots = ANALYTICS_RECENT_SLOTS,
+): Shorts[] {
+  const byNewest = [...list].sort((a, b) => (a.youtubeTs! < b.youtubeTs! ? 1 : -1));
+  const recent = byNewest.slice(0, Math.max(0, Math.min(recentSlots, max)));
+  const taken = new Set(recent.map((s) => s.id));
+  // 나머지 몫 — 한 번도 못 받은 편(0)이 가장 앞, 그다음 오래된 순.
+  const backfill = byNewest
+    .filter((s) => !taken.has(s.id))
+    .sort((a, b) => lastAt(a.id) - lastAt(b.id))
+    .slice(0, Math.max(0, max - recent.length));
+  return [...recent, ...backfill];
+}
+
+/**
+ * 시청 지속률·유입 경로 동봉 수집(youtube:analytics 샘플) — 조회수 수집과 별개 줄로 쌓는다.
+ * 스코프 없는 토큰(재연결 전)이면 첫 실패에서 전체 중단하고 1회만 경고한다(영상마다 403 로그 방지).
+ * 애널리틱스는 처리 지연이 있어 신작은 며칠 뒤에야 값이 붙는다 — 빈 응답은 스킵(0 으로 기록하지 않음).
+ */
+async function collectShortsAnalytics(due: Shorts[], now: number, days: number, signal?: AbortSignal): Promise<void> {
+  const targets = pickAnalyticsTargets(
+    due.filter((s) => !!s.youtubeId && !!s.youtubeTs),
+    (id) => { try { return lastAnalyticsAt(readMetrics(id)); } catch { return 0; } },
+  );
+  if (!targets.length) return;
+  if (due.length > targets.length) {
+    console.log('[perf-sync]', `쇼츠 애널리틱스 — ${targets.length}편 수집(대상 ${due.length}편, 상한 ${ANALYTICS_MAX_VIDEOS} · 최신 우선 + 미수집 구작 순환)`);
+  }
+  // 애널리틱스는 처리 지연이 있어 최근 며칠은 조회해도 빈 응답이다 — 경계까지만 묻고 그 뒤 업로드분은 건너뛴다.
+  const end = ymd(now - ANALYTICS_LAG_DAYS * 86_400_000);
+  let ok = 0, skipped = 0; const pcts: number[] = []; const shares: number[] = [];
+  for (const s of targets) {
+    const upload = new Date(s.youtubeTs!).getTime();
+    if (ymd(upload) > end) { skipped += 1; continue; } // 아직 처리 구간에 못 들어온 신작
+    try {
+      const start = ymd(upload - 86_400_000); // 업로드 전날부터(타임존 경계 방어)
+      const { retention, traffic, searchTerms } = await fetchVideoAnalytics(s.brand ?? '', s.youtubeId!, start, end, signal);
+      if (!hasMeasurement(retention, traffic)) { skipped += 1; continue; } // 처리 전·빈 측정 — 다음 틱 재시도
+      appendMetrics(s.id, {
+        // 검색어를 쌓는다(2026-09-04) — 종전엔 빈 배열이라 '무엇으로 들어왔는지'가 남지 않았다.
+        measuredAt: new Date().toISOString(), views: retention!.views, searchInflow: searchTerms,
+        avgViewPct: retention!.avgViewPct, avgViewSec: retention!.avgViewSec,
+        watchMinutes: retention!.watchMinutes, traffic, source: 'youtube:analytics',
+      });
+      ok += 1; pcts.push(retention!.avgViewPct);
+      const share = shortsFeedShare(traffic);
+      if (share !== null) shares.push(share);
+    } catch (e) {
+      const msg = e instanceof Error ? e.message : String(e);
+      if (isAuthError(msg)) { // 토큰·스코프 문제는 전 영상 공통 — 조기 종료
+        console.log('[perf-sync]', `쇼츠 애널리틱스 중단(무해) — ${msg.slice(0, 120)} · 채널 재연결(yt-analytics 스코프) 필요`);
+        return;
+      }
+      skipped += 1; // 일시 오류는 이 영상만 건너뛴다(다음 틱 재시도)
+      console.log('[perf-sync]', `쇼츠 애널리틱스 ${s.id} 스킵(무해) — ${msg.slice(0, 100)}`);
+    }
+  }
+  if (!ok) return;
+  const med = (xs: number[]): number => { const a = [...xs].sort((x, y) => x - y); return a[Math.floor(a.length / 2)] ?? 0; };
+  const shareTxt = shares.length ? ` · Shorts 피드 비중 중앙 ${Math.round(med(shares) * 100)}%` : '';
+  const skipTxt = skipped ? ` · 미처리·스킵 ${skipped}편` : '';
+  console.log('[perf-sync]', `쇼츠 애널리틱스 ${ok}편 — 시청비율 중앙 ${Math.round(med(pcts))}%${shareTxt}${skipTxt}`);
 }
 
 /** 릴스 강화 1회 — reinforceShorts 의 메타 채널 판. 신호는 도달·저장률·공유율(cardnewsSignal 재사용). */

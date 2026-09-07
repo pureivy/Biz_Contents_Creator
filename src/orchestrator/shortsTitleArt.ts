@@ -89,7 +89,7 @@ export async function generateTitleArt(input: {
       const png = manifestFirstImage(manifest);
       if (!png) continue;
       lastPng = png;
-      if (await qaKoreanText(png, expected, input.signal)) break;
+      if ((await qaKoreanText(png, expected, input.signal)).ok) break; // 객체 반환(2026-09-06) — .ok 를 봐야 한다
     }
     if (!lastPng) return null;
     const out = path.join(input.dir, 'title-art.png');

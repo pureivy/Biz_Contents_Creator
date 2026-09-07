@@ -15,6 +15,7 @@ import {
 } from './notify';
 import type { TgButton } from './notify';
 import type { FactGateInfo } from '../content/factGate';
+import { platformLabel, type ShortsPlatform } from '../content/shortsPlatform';
 import { readStyleLint, readBriefGate } from '../sessions/digest';
 import type { BriefGateRecord } from '../sessions/digest';
 
@@ -33,6 +34,8 @@ export interface CardReadyInfo {
 export interface ShortsReadyInfo {
   id: string; topic: string; brand?: string; durationSec?: number; scenes?: number;
   sourcePieceId?: string; writer?: string; director?: string;
+  /** 발행 대상 채널(2026-09-03 분리) — 버튼·캡션 표기에 쓴다. 미지정은 레거시(양쪽 겸용). */
+  platform?: ShortsPlatform;
   factGate?: FactGateInfo;
 }
 
@@ -125,7 +128,7 @@ export function factGateLines(info: FactGateInfo | undefined, maxItems: number, 
 }
 
 /** 자동 임시저장이 꺼진 동안의 안내 1줄(2026-08-27 사용자 확정) — 사람이 버튼을 눌러야 저장된다는 사실을 못 박는다. */
-const MANUAL_REVIEW_LINE = '✋ 수동 검토 대기 — 아래 "네이버 임시저장" 버튼으로 저장';
+const MANUAL_REVIEW_LINE = '✋ 수동 검토 대기 — 아래 "네이버 비공개 발행" 버튼으로 발행';
 
 /** 브리프 게이트 줄(2026-08-28) — `⚖ 브리프 반려 43/70 · 미해소 3건` + 지적 최대 2건. 순수 — 테스트 대상.
  * 통과(approved)면 빈 문자열: 정상은 알리지 않는다(줄이 늘면 반려 줄이 묻힌다).
@@ -180,7 +183,7 @@ export function cardnewsCaptionHtml(c: CardReadyInfo): string {
 
 /** 쇼츠 ready 캡션(HTML, 영상에 부착). 순수 — 테스트 대상. */
 export function shortsCaptionHtml(s: ShortsReadyInfo): string {
-  const staff = [s.writer, s.director].filter(Boolean).join('·');
+  const staff = [s.platform ? `${platformLabel(s.platform)}용` : '', s.writer, s.director].filter(Boolean).join('·');
   const specs = [
     typeof s.durationSec === 'number' ? `${s.durationSec}초` : '',
     typeof s.scenes === 'number' ? `씬 ${s.scenes}개` : '',
@@ -195,18 +198,58 @@ export function shortsCaptionHtml(s: ShortsReadyInfo): string {
   ].filter(Boolean).join('\n');
 }
 
+/** 유튜브 비공개 업로드 완료 알림 입력 — 쇼츠 레코드에서 표시에 쓰는 필드만. */
+export interface YoutubeUploadedInfo {
+  id: string; topic: string; title?: string; brand?: string;
+  durationSec?: number; scenes?: number; url: string;
+}
+
+/**
+ * 유튜브 비공개 업로드 완료 알림(사용자 요청 2026-08-31) — 발행 계열 중 이것만 알린다.
+ * 릴스·인스타는 제외했다: 세트당 3건이면 금방 소음이 되고, 사용자가 확인하고 싶은 건 유튜브뿐이다.
+ *
+ * "비공개"를 문구에 못박는다 — 이 파이프라인은 유튜브에 비공개로만 올리고 전체공개 전환은 사람이 한다.
+ * 알림이 '발행됐다'로 읽히면 이미 공개된 줄 알고 확인을 건너뛰게 된다.
+ */
+export function youtubeUploadedHtml(s: YoutubeUploadedInfo): string {
+  const specs = [
+    typeof s.durationSec === 'number' ? `${s.durationSec}초` : '',
+    typeof s.scenes === 'number' ? `씬 ${s.scenes}개` : '',
+  ].filter(Boolean).join(' · ');
+  return [
+    escapeHtml(`📺 유튜브 비공개 업로드 완료${brandTag(s.brand)}`),
+    `<b>${escapeHtml(clip(s.title || s.topic, 200))}</b>`,
+    specs ? escapeHtml(specs) : '',
+    s.url,
+  ].filter(Boolean).join('\n');
+}
+
+/** 전송 — 알림 채널이 꺼져 있으면 조용히 통과. 실패는 무해(업로드 자체는 이미 성공했다). */
+export async function notifyYoutubeUploaded(s: YoutubeUploadedInfo): Promise<void> {
+  try {
+    if (!contentReadyNotifyEnabled()) return;
+    const html = youtubeUploadedHtml(s);
+    if (telegramCreds()) await sendTelegramHtml(html);
+    await notifyWebhookOnly({ title: `📺 유튜브 비공개 업로드 완료${brandTag(s.brand)} · ${s.title || s.topic}`, body: s.url });
+  } catch { /* 무해 */ }
+}
+
 // 발행 버튼(인라인 키보드) — callback_data 규격은 telegramBot.parseCallback 과 한 쌍("<op>:<id>", ≤64바이트).
 const blogButtons = (id: string): TgButton[][] => [[
-  { text: '📗 네이버 임시저장', callback_data: `bp:${id}` },
+  { text: '📗 네이버 비공개 발행', callback_data: `bp:${id}` },
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
 const cardnewsButtons = (id: string): TgButton[][] => [[
   { text: '📸 인스타 발행', callback_data: `cp:${id}` },
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
-const shortsButtons = (id: string): TgButton[][] => [[
-  { text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` },
-  { text: '🎬 릴스 발행', callback_data: `sm:${id}` },
+/**
+ * 숏폼 검토 버튼 — 채널 전용 레코드는 그 채널 버튼만 띄운다(2026-09-03 채널 분리).
+ * 레거시(platform 미지정)는 종전대로 둘 다. 잘못 눌러도 서버가 409 로 막지만, 애초에 안 보이는 게 낫다.
+ */
+const shortsButtons = (id: string, platform?: ShortsPlatform): TgButton[][] => [[
+  ...(!platform || platform === 'youtube' ? [{ text: '▶️ 유튜브 업로드', callback_data: `sy:${id}` }] : []),
+  ...(!platform || platform === 'instagram' ? [{ text: '🎬 릴스 발행', callback_data: `sm:${id}` }] : []),
   { text: '✍ 수정요청', callback_data: `rv:${id}` },
 ]];
 
@@ -279,9 +322,9 @@ export async function notifyShortsReady(s: ShortsReadyInfo, videoPath: string): 
     if (telegramCreds()) {
       // 1080×1920 고정 — Remotion 컴포지션·ffmpeg 폴백 모두 이 규격으로 렌더(shortsRender). 커버는 320px 축소본.
       const thumb = await tgVideoThumb(videoPath);
-      const sent = await sendTelegramVideo(videoPath, caption, shortsButtons(s.id),
+      const sent = await sendTelegramVideo(videoPath, caption, shortsButtons(s.id, s.platform),
         { width: 1080, height: 1920, thumbnailPath: thumb ?? undefined });
-      if (!sent) await sendTelegramHtml(`${caption}\n(영상은 스튜디오에서 확인 — 전송 한도 초과/실패)`, shortsButtons(s.id));
+      if (!sent) await sendTelegramHtml(`${caption}\n(영상은 스튜디오에서 확인 — 전송 한도 초과/실패)`, shortsButtons(s.id, s.platform));
     }
     await notifyWebhookOnly({
       title: `🎬 쇼츠 검토 대기${brandTag(s.brand)} · ${s.topic}`,

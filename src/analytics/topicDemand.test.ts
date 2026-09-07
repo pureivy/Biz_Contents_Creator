@@ -4,8 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   contentTokens, familyVolume, seasonIndex, demandScore, demandVerdict, formatDemandLine,
-  buildDemandBlock, assessCandidatesDemand, type DemandRow, type DemandSnap,
-} from './topicDemand';
+  buildDemandBlock, assessCandidatesDemand, type DemandRow, type DemandSnap, BLOCK_ROWS, SNAP_MAX_SEEDS, MAX_WINNER_SEEDS } from './topicDemand';
 
 // 커넥터는 전량 가짜 — 실제 네이버 호출 없이 묶음 호출 횟수·매핑만 검증한다.
 const H = vi.hoisted(() => ({
@@ -186,7 +185,7 @@ describe('buildDemandBlock — 두뇌 주입 블록(순수)', () => {
   const NOW = new Date('2026-08-26T12:00:00').getTime();
   it('점수 내림차순으로 나열하고 지시문을 붙인다', () => {
     const b = buildDemandBlock(snap, NOW);
-    expect(b).toContain('[검색 수요 실측 — 2026-08-26]');
+    expect(b).toContain('[검색 수요 실측 — 2026-08-26 · 점수순(검색량 × 시즌)]');
     expect(b.indexOf('블루베리 묘목')).toBeLessThan(b.indexOf('사과나무 비료'));
     expect(b.indexOf('사과나무 비료')).toBeLessThan(b.indexOf('가을 거름'));
     // 하한 숫자는 CONFIG 보간이라 여기선 문장만 확인한다(보간 검증은 아래 스냅샷 describe 에서 임계값을 바꿔 한다).
@@ -195,9 +194,9 @@ describe('buildDemandBlock — 두뇌 주입 블록(순수)', () => {
     expect(b).toContain('미만 키워드로 주제를 세우지 마라. 수요가 있는 키워드는 그대로 keyword 로 쓰고, 계열 최대 연관어의 검색량이 더 크면 주제는 그 수요를 겨냥하되 표기는 자연스러운 띄어쓰기로 써라.');
     expect(b).not.toContain('그 표기를 우선하라');
   });
-  it('상위 12줄까지만 담는다', () => {
+  it(`상위 ${BLOCK_ROWS}줄까지만 담는다`, () => {
     const many: DemandSnap = { date: '2026-08-26', rows: Array.from({ length: 20 }, (_, i) => row({ keyword: `k${i}`, volume: i * 100 })) };
-    expect(buildDemandBlock(many, NOW).split('\n').filter((l) => l.startsWith('- ')).length).toBe(12);
+    expect(buildDemandBlock(many, NOW).split('\n').filter((l) => l.startsWith('- ')).length).toBe(BLOCK_ROWS);
   });
   it('계열 쿨다운 토큰이 든 행은 표에서 뺀다(트렌드 블록과 같은 필터)', () => {
     // 쿨다운으로 '제안 불가'인 계열을 수요 표에 남기면, 두뇌에 "수요 있는 소재"로 보여 금지와 정면 충돌한다.
@@ -391,38 +390,50 @@ describe('스냅샷 IO — 킬스위치·시드 슬롯·하루 1회·실패 시 
     const { demandSignalBlock } = await import('./topicDemand');
     expect(demandSignalBlock()).toContain('검색량 50/월 미만·시즌 지수 0.4 미만 키워드로 주제를 세우지 마라.');
   });
-  it('시드 상한 15칸을 브랜드 회전 창 10 + winners 5 로 나눈다(브랜드 시드 21개가 winners 를 굶기던 결함)', async () => {
-    writeBrand(`name: 테스트나무\nseedKeywords:\n${Array.from({ length: 21 }, (_, i) => `  - 시드${i}`).join('\n')}\n`);
+  it(`시드 상한 ${SNAP_MAX_SEEDS}칸을 회전 창 + winners ${MAX_WINNER_SEEDS} 로 나눈다(브랜드 시드가 winners 를 굶기던 결함)`, async () => {
+    // 시드를 창보다 많이 둔다 — 창이 시드보다 크면 회전 자체가 필요 없어 이 계약이 성립하지 않는다
+    // (2026-09-01 에 창을 40으로 넓히자 21개 시드가 전부 들어가며 이 전제가 깨졌다).
+    const SEEDS = SNAP_MAX_SEEDS + 6;
+    writeBrand(`name: 테스트나무\nseedKeywords:\n${Array.from({ length: SEEDS }, (_, i) => `  - 시드${i}`).join('\n')}\n`);
     fs.mkdirSync(snapDir(), { recursive: true });
     fs.writeFileSync(path.join(snapDir(), 'strategy-테스트나무.json'), JSON.stringify({
-      winners: Array.from({ length: 8 }, (_, i) => ({ keyword: `승자${i}`, score: i, firstSeenAt: '2026-08-18T00:00:00.000Z' })),
+      winners: Array.from({ length: MAX_WINNER_SEEDS + 3 }, (_, i) => ({ keyword: `승자${i}`, score: i, firstSeenAt: '2026-08-18T00:00:00.000Z' })),
     }), 'utf-8');
     mockCfg();
     const { demandSeeds } = await import('./topicDemand');
-    // 2026-08-26 = 연중 238일 → 238 % 21 = 7 → 시드7 부터 10개.
     const seeds = demandSeeds(undefined, new Date('2026-08-26T12:00:00'));
-    expect(seeds.length).toBe(15);
-    expect(seeds.slice(0, 10)).toEqual(Array.from({ length: 10 }, (_, i) => `시드${7 + i}`));
-    expect(seeds.slice(10)).toEqual(['승자7', '승자6', '승자5', '승자4', '승자3']); // 점수 높은 순 5개
+    // 계약만 본다 — 내부 슬롯 산식을 테스트가 재계산하면 상수를 바꿀 때마다 깨진다(이 파일의 반복된 실패 원인).
+    expect(seeds.length).toBeLessThanOrEqual(SNAP_MAX_SEEDS);
+    const winners = seeds.filter((k) => k.startsWith('승자'));
+    expect(winners.length).toBeGreaterThan(0);                            // winners 몫이 굶지 않는다(핵심 계약)
+    expect(winners.length).toBeLessThanOrEqual(MAX_WINNER_SEEDS);
+    expect(winners[0]).toBe(`승자${MAX_WINNER_SEEDS + 2}`);                // 점수 높은 순
+    expect(seeds.filter((k) => k.startsWith('시드')).length).toBeGreaterThan(0); // 브랜드 시드도 함께 실린다
   });
-  it('회전 창은 날짜마다 밀리고 끝에서 앞으로 감긴다(21개 시드가 ~3일이면 한 바퀴)', async () => {
-    writeBrand(`name: 테스트나무\nseedKeywords:\n${Array.from({ length: 21 }, (_, i) => `  - 시드${i}`).join('\n')}\n`);
+  // 2026-09-01 계약 변경 — 창을 40으로 넓히자 이 케이스가 사라졌다. 브랜드 로더가 seedKeywords 를
+  // 30개로 캡하는데(brand.ts) 창이 최소 32칸(40 − winners 8)이라, 시드는 **항상 전부** 들어간다.
+  // 즉 날짜 회전 분기(brand.length > t)는 seedKeywords 경로에서 더 이상 도달하지 않는다.
+  // 회전은 창이 시드보다 작던 시절의 보정이었고, 넓힌 지금은 '매일 전량'이 더 나은 동작이다.
+  it('창이 시드보다 크면 회전 없이 매일 전량이 실린다', async () => {
+    const SEEDS = 30;   // 로더 캡과 동일 — 실제로 가능한 최대치
+    writeBrand(`name: 테스트나무\nseedKeywords:\n${Array.from({ length: SEEDS }, (_, i) => `  - 시드${i}`).join('\n')}\n`);
     fs.mkdirSync(snapDir(), { recursive: true });
     fs.writeFileSync(path.join(snapDir(), 'strategy-테스트나무.json'),
       JSON.stringify({ winners: [{ keyword: '승자0', score: 1, firstSeenAt: '2026-08-18T00:00:00.000Z' }] }), 'utf-8');
     mockCfg();
     const { demandSeeds } = await import('./topicDemand');
-    expect(demandSeeds(undefined, new Date('2026-08-27T12:00:00'))[0]).toBe('시드8');
-    const wrapped = demandSeeds(undefined, new Date('2026-09-03T12:00:00')); // 연중 246일 → 246 % 21 = 15
-    expect(wrapped[0]).toBe('시드15');
-    expect(wrapped.slice(0, 14)).toContain('시드0');                          // 끝(시드20) 다음은 앞으로 감긴다
-    expect(new Set(wrapped.slice(0, 14)).size).toBe(14);                      // 감기면서 중복되지 않는다
+    const a = demandSeeds(undefined, new Date('2026-08-27T12:00:00'));
+    const b = demandSeeds(undefined, new Date('2026-09-03T12:00:00'));
+    const win = (x: string[]): string[] => x.filter((k) => k.startsWith('시드'));
+    expect(win(a)).toHaveLength(SEEDS);            // 전량
+    expect(win(a)).toEqual(win(b));                 // 날짜가 달라도 같다(회전 불필요)
+    expect(new Set(win(a)).size).toBe(SEEDS);       // 중복 없음
   });
-  it('winners 가 없으면 브랜드 시드가 15칸을 다 쓴다(빈 슬롯을 놀리지 않는다)', async () => {
+  it('winners 가 없으면 브랜드 시드가 남은 칸을 다 쓴다(빈 슬롯을 놀리지 않는다)', async () => {
     writeBrand(`name: 테스트나무\nseedKeywords:\n${Array.from({ length: 21 }, (_, i) => `  - 시드${i}`).join('\n')}\n`);
     mockCfg();
     const { demandSeeds } = await import('./topicDemand');
-    expect(demandSeeds(undefined, new Date('2026-08-26T12:00:00')).length).toBe(15);
+    expect(demandSeeds(undefined, new Date('2026-08-26T12:00:00')).length).toBe(21); // 창(40)보다 적으면 전부 들어간다
   });
   it('스냅샷이 3일 넘게 낡으면 블록은 빈 문자열(무주입)', async () => {
     fs.mkdirSync(snapDir(), { recursive: true });

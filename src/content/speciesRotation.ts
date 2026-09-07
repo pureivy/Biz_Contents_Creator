@@ -50,19 +50,49 @@ export function speciesCoverage(
   return out;
 }
 
-/** 후보가 월 상한을 넘은 수종이면 {name,count}, 아니면 null. */
+/**
+ * 수종별 월 상한 — 수요가 큰 수종은 몇 편 더 허용한다(순수, 2026-09-04 사용자 확정).
+ *
+ * 종전엔 수요와 무관하게 전 수종 2편이었다. 실측 배분이 그래서 어긋났다:
+ *   6편  배롱나무      수요 22/월      검색 유입 27회
+ *   4편  포도나무      수요 230/월     검색 유입 461회
+ *   3편  하스카프베리  수요 목록 밖    검색 유입 1,085회
+ * 수종 수를 넓게 가는 건 유지한다(109편에 104소재 — 이미 최대치다). 편수 배분만 수요에 비례시킨다.
+ *
+ * **느슨하게만 만든다. 절대 조이지 않는다.** 이 채널 최고 성적(하스카프베리 검색 1,085회)은
+ * 네이버 수요 목록에 아예 없는 수종에서 나왔다. 수요가 낮다고 상한을 낮췄다면 그 수종을 처음부터
+ * 막았을 것이다 — 수요 데이터가 모르는 틈새가 실제로 가장 크게 먹혔다.
+ */
+export function speciesCapFor(volume: number | undefined, base = SPECIES_MONTHLY_CAP): number {
+  const v = Number(volume);
+  if (!Number.isFinite(v) || v <= 0) return base;   // 미상·0 은 종전 그대로 — 틈새를 막지 않는다
+  if (v >= 5000) return base + 2;
+  if (v >= 1000) return base + 1;
+  return base;
+}
+
+/** cap 인자 정규화(순수) — 숫자면 그대로, 함수면 수종별 상한. 종전 호출부는 그대로 동작한다. */
+function capOf(cap: number | ((name: string) => number), name: string): number {
+  if (typeof cap !== 'function') return cap;
+  try { const n = cap(name); return Number.isFinite(n) && n >= 1 ? n : SPECIES_MONTHLY_CAP; }
+  catch { return SPECIES_MONTHLY_CAP; }
+}
+
+/** 후보가 월 상한을 넘은 수종이면 {name,count}, 아니면 null. cap 은 숫자 또는 수종별 함수. */
 export function overSpeciesCap(
-  text: string, coverage: Map<string, number>, catalog: SpeciesGroup[] | undefined, cap = SPECIES_MONTHLY_CAP,
+  text: string, coverage: Map<string, number>, catalog: SpeciesGroup[] | undefined,
+  cap: number | ((name: string) => number) = SPECIES_MONTHLY_CAP,
 ): { name: string; count: number } | null {
   const sp = speciesInText(text, catalog);
   if (!sp) return null;
   const n = coverage.get(sp) ?? 0;
-  return n >= cap ? { name: sp, count: n } : null;
+  return n >= capOf(cap, sp) ? { name: sp, count: n } : null;
 }
 
 /** 프롬프트 블록 — 상한 도달(제안 금지) · 최근 다룸(피함) · 아직 안 다룬 수종(우선, 분류별). */
 export function speciesRotationBlock(
-  catalog: SpeciesGroup[] | undefined, coverage: Map<string, number>, cap = SPECIES_MONTHLY_CAP, minFresh = 5,
+  catalog: SpeciesGroup[] | undefined, coverage: Map<string, number>,
+  cap: number | ((name: string) => number) = SPECIES_MONTHLY_CAP, minFresh = 5,
 ): string {
   if (!catalog?.length) return '';
   const capped: string[] = []; const recent: string[] = []; const freshGroups: string[] = [];
@@ -70,7 +100,7 @@ export function speciesRotationBlock(
     const fresh: string[] = [];
     for (const sp of g.species ?? []) {
       const n = coverage.get(sp.name) ?? 0;
-      if (n >= cap) capped.push(`${sp.name}(${n}편)`);
+      if (n >= capOf(cap, sp.name)) capped.push(`${sp.name}(${n}편)`);
       else if (n > 0) recent.push(`${sp.name}(${n}편)`);
       else fresh.push(sp.name);
     }

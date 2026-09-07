@@ -91,7 +91,12 @@ export function injectPauseBreaks(text: string, maxBreaks = 3): string {
  */
 async function synthesizeElevenLabs(
   text: string,
-  opts: { voiceId?: string; pauseBreaks?: boolean; previousText?: string; nextText?: string; signal?: AbortSignal },
+  opts: {
+    voiceId?: string; pauseBreaks?: boolean; previousText?: string; nextText?: string;
+    /** 작가별 낭독 설정(2026-09-03) — 같은 문장도 작가마다 다르게 읽히게. speed 와 병합된다. */
+    voiceSettings?: Record<string, number>;
+    signal?: AbortSignal;
+  },
 ): Promise<Buffer> {
   const key = elevenLabsKey();
   if (!key) throw new Error('ELEVENLABS_API_KEY 없음');
@@ -104,7 +109,10 @@ async function synthesizeElevenLabs(
   };
   if (opts.previousText) body.previous_text = opts.previousText;
   if (opts.nextText) body.next_text = opts.nextText;
-  if (CONFIG.elevenLabsSpeed !== 1.0) body.voice_settings = { speed: CONFIG.elevenLabsSpeed };
+  // 작가별 설정 + 전역 속도를 한 객체로 병합(둘 다 없으면 보이스 기본값 유지).
+  const vs: Record<string, number> = { ...(opts.voiceSettings ?? {}) };
+  if (CONFIG.elevenLabsSpeed !== 1.0) vs.speed = CONFIG.elevenLabsSpeed;
+  if (Object.keys(vs).length) body.voice_settings = vs;
   const r = await fetch(url, {
     method: 'POST',
     headers: { 'xi-api-key': key, 'content-type': 'application/json', accept: 'audio/mpeg' },
@@ -140,6 +148,8 @@ export async function synthesize(
   text: string,
   opts: {
     voice?: string; openaiVoice?: string; elevenVoiceId?: string; instructions?: string;
+    /** ElevenLabs 전용 — 작가별 stability·similarity_boost·style. */
+    elevenVoiceSettings?: Record<string, number>;
     /** ElevenLabs 전용 — 문장·쉼표 경계 break 태그 주입(몰아 읽기 대응). 폴백 경로엔 미적용. */
     pauseBreaks?: boolean;
     /** ElevenLabs 전용 — 이웃 세그먼트 텍스트 스티칭(경계 운율 연속). 낭독되지 않는다. */
@@ -157,6 +167,7 @@ export async function synthesize(
     try {
       return await synthesizeElevenLabs(clean, {
         voiceId: opts.elevenVoiceId,
+        voiceSettings: opts.elevenVoiceSettings,
         pauseBreaks: opts.pauseBreaks,
         previousText: opts.previousText ? sanitizeForTts(opts.previousText) : undefined,
         nextText: opts.nextText ? sanitizeForTts(opts.nextText) : undefined,

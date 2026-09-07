@@ -94,3 +94,42 @@ describe('renderMarkdown — 발행용 MD', () => {
     expect(md).toContain('**태그:** #장마철 #제습');
   });
 });
+
+// 실사고(2026-08-31): imagesReady 는 '이미지를 생성할 예정인 런인가'라는 **예측**이라(org.ts, 생성 전에
+// 계산) 생성이 실패해도 true 였다. .env 의 BLOG_PYTHON 이 삭제된 경로를 가리켜 openai_image.py 가 아예
+// 안 돌았는데 draft.html 은 <img src="images/blog-image-01.png"> 를 그대로 뱉었고, 검토탭 미리보기가
+// 깨진 이미지로 떴다(사용자 제보: "블로그 글에 이미지가 깨어져 있어").
+// 부분 실패도 같은 문제다 — 3장 중 2장만 나와도 한 장은 깨진다. 그래서 슬롯 단위로 실재를 반영한다.
+describe('renderHtml — readySlots(실재 파일 기준 슬롯별 판정)', () => {
+  const d = {
+    ...base,
+    imageSlots: [{ alt: '창가 제습', prompt: 'p1' }, { alt: '숯 바구니', prompt: 'p2' }, { alt: '제습기', prompt: 'p3' }],
+    bodyMarkdown: '## 하나\n[IMAGE: a]\n본문.\n\n## 둘\n[IMAGE: b]\n본문2.\n\n## 셋\n[IMAGE: c]\n본문3.',
+  };
+
+  it('한 장도 못 만들었으면 <img> 없이 전부 자리표시 박스', () => {
+    const html = renderHtml(d, { imagesReady: true, readySlots: new Set<number>() });
+    expect(html).not.toContain('<img');
+    expect(html).toContain('이미지 1 — 창가 제습');
+    expect(html).toContain('이미지 3 — 제습기');
+  });
+
+  it('부분 성공(1·3번만 생성)이면 그 둘만 <img>, 2번은 자리표시', () => {
+    const html = renderHtml(d, { imagesReady: true, readySlots: new Set([0, 2]) });
+    expect(html).toContain('src="images/blog-image-01.png"');
+    expect(html).not.toContain('src="images/blog-image-02.png"');
+    expect(html).toContain('src="images/blog-image-03.png"');
+    expect(html).toContain('이미지 2 — 숯 바구니');
+  });
+
+  it('전부 생성됐으면 종전과 같이 3장 모두 <img>', () => {
+    const html = renderHtml(d, { imagesReady: true, readySlots: new Set([0, 1, 2]) });
+    for (const n of ['01', '02', '03']) expect(html).toContain(`src="images/blog-image-${n}.png"`);
+    expect(html).not.toContain('class="ph"');
+  });
+
+  it('readySlots 미지정이면 종전 imagesReady 동작 그대로(하위 호환)', () => {
+    expect(renderHtml(d, { imagesReady: true })).toContain('src="images/blog-image-02.png"');
+    expect(renderHtml(d, { imagesReady: false })).not.toContain('<img');
+  });
+});

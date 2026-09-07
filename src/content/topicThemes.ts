@@ -6,7 +6,10 @@
  */
 export interface TopicTheme { theme: string; seeds: string[]; match: string[] }
 
-export const THEME_MONTHLY_CAP = 4;
+// 상한 4 → 5(2026-09-01 사용자 확정, 최소 상향). 산술이 안 맞았다: 축 16 × 4 = 월 수용량 64편인데
+// 30일 생산이 68편이라 구조적 초과였고, 어느 축이든 결국 상한에 닿아 16축 중 10축이 막혔다.
+// 상한만 올리면 쏠림이 커지므로(실측 '묘목 구매·선택' 11편) 축 확대·하위 축 우선과 함께 간다.
+export const THEME_MONTHLY_CAP = 5;
 export const THEME_WINDOW_DAYS = 30;
 
 const compact = (s: string): string => (s ?? '').normalize('NFC').replace(/\s+/g, '');
@@ -62,17 +65,27 @@ export function themeRotationBlock(
   candidates = 8,
 ): string {
   if (!themes?.length) return '';
-  const capped: string[] = []; const recent: string[] = []; const fresh: string[] = [];
+  // 우선 목록의 기준을 'n===0' 에서 **커버리지 하위**로 바꾼다(2026-09-01 사용자 요청: 다양한 주제).
+  // 실측: 30일 68편이 나오면 0편인 축이 존재하지 않아 '아직 안 다룬 축' 목록이 늘 비었고, 남는 지시가
+  // "가급적 피함"뿐이라 후보가 결국 많이 다룬 축으로 몰렸다. 16축 중 10축 상한 → 깨끗한 후보 0 →
+  // 기아 폴백이 유사 주제를 채택(목련 중복). 적게 다룬 축을 이름으로 지목해야 후보가 그쪽으로 간다.
+  // 임계는 상한의 절반 — 상한 5면 2편 이하가 '적게 다룬' 축이다(고정 숫자보다 상한을 따라가게).
+  const lowMark = Math.max(1, Math.floor(cap / 2));
+  const capped: string[] = []; const recent: string[] = [];
+  const priority: Array<{ n: number; line: string }> = [];
   for (const th of themes) {
     const n = coverage.get(th.theme) ?? 0;
+    const seeds = (th.seeds ?? []).slice(0, 4).join(', ');
     if (n >= cap) capped.push(`${th.theme}(${n}편)`);
-    else if (n > 0) recent.push(`${th.theme}(${n}편)`);
-    else fresh.push(`  · ${th.theme}: 예) ${(th.seeds ?? []).slice(0, 4).join(', ')}`);
+    else if (n <= lowMark) priority.push({ n, line: `  · ${th.theme}(${n}편): 예) ${seeds}` });
+    else recent.push(`${th.theme}(${n}편)`);
   }
+  priority.sort((a, b) => a.n - b.n); // 적은 순 — 0편이 있으면 그게 맨 앞
+  const fresh = priority.map((p) => p.line);
   const lines = [`[주제 축 로테이션 — 최근 ${THEME_WINDOW_DAYS}일 블로그 기준, 축당 상한 ${cap}편 · 수종 로테이션과 별개 축]`];
   if (capped.length) lines.push(`- 상한 도달 → 제안 금지(코드가 기각한다): ${capped.join(', ')}`);
   if (recent.length) lines.push(`- 최근 다룸 → 가급적 피함: ${recent.join(', ')}`);
-  if (fresh.length) lines.push('- 아직 안 다룬 축 → 우선(사람들이 실제로 치는 검색어 예시):', ...fresh);
+  if (fresh.length) lines.push('- 적게 다룬 축 → **여기서 우선 고른다**(사람들이 실제로 치는 검색어 예시):', ...fresh);
   lines.push('- 후보 8개는 서로 다른 축에서 고르고, 수종 × 축 조합은 기존 글과 겹치지 않게.');
   // 좁은 장에서의 지시 강화(2026-08-30) — 축이 많이 막히면 "가급적 피함"까지 써야 후보가 채워진다.
   // 그 사실을 명시하지 않으면 두뇌가 상한 축에서 8개를 억지로 만들고 전부 코드 기각된다(실측: 16축 중
@@ -85,7 +98,7 @@ export function themeRotationBlock(
     lines.push(
       `- ⚠ 지금 쓸 수 있는 축은 ${open}개뿐이다(${themes.length}축 중 ${capped.length}축 상한 도달).`
       + ` 후보 8개를 채우려면 '아직 안 다룬 축'과 '최근 다룸' 축을 모두 써라 — 상한 축으로 자리를 메우면 그 후보는 버려진다.`
-      + (fresh.length ? '' : ' 안 다룬 축이 없으면 최근 다룸 축에서 편수가 적은 것부터 고른다.'),
+      + (fresh.length ? '' : ' 적게 다룬 축이 없으면 남은 축에서 편수가 적은 것부터 고른다.'),
     );
   }
   return lines.join('\n');

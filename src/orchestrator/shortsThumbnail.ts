@@ -108,16 +108,95 @@ export function buildThumbnailPrompt(copy: ThumbCopy): string {
   ].filter(Boolean).join(' ');
 }
 
-/** 비전 QA — 이미지의 한글이 기대 문구대로 정확한지. 비전 불가/판정 실패면 통과(파이프라인 차단 방지). */
-export async function qaKoreanText(imagePath: string, expected: string, signal?: AbortSignal): Promise<boolean> {
-  if (!visionCapable()) return true;
-  const j = await microJSON<{ ok?: boolean }>(
+/** 비전 QA 결과 — 통과 여부와, 깨진 것으로 보이는 '기대 문구 쪽 낱말'. */
+export interface ThumbQaResult { ok: boolean; wrong: string[] }
+
+/**
+ * 비전 QA — 이미지의 한글이 기대 문구대로 정확한지. 비전 불가/판정 실패면 통과(파이프라인 차단 방지).
+ *
+ * 어느 낱말이 깨졌는지도 받는다(2026-09-06). 종전엔 불리언만 받아서, 같은 글자가 계속 깨져도
+ * 같은 문구로 다시 뽑을 수밖에 없었다 — 실측으로 '짙은'이 네 번 연속 '질은'으로 나왔고
+ * 재생성 3회가 전부 같은 자리에서 실패했다. 무엇이 깨졌는지 알아야 낱말을 바꿔 볼 수 있다.
+ */
+export async function qaKoreanText(imagePath: string, expected: string, signal?: AbortSignal): Promise<ThumbQaResult> {
+  if (!visionCapable()) return { ok: true, wrong: [] };
+  const j = await microJSON<{ ok?: boolean; wrong?: unknown }>(
     stdModel(),
     '당신은 한국어 텍스트 검수자입니다. JSON 만 출력합니다.',
-    `이 썸네일 이미지에 그려진 한국어 글자에 오타·깨진 자소·이상한 글자가 있는지 판정하라. 기대 문구(순서 무관): ${expected}. 모두 정확하면 ok=true, 하나라도 깨졌으면 ok=false. JSON: {"ok":true}`,
-    { maxOutputTokens: 150, signal, visionPaths: [imagePath] },
+    `이 썸네일 이미지에 그려진 한국어 글자에 오타·깨진 자소·이상한 글자가 있는지 판정하라. 기대 문구(순서 무관): ${expected}. 모두 정확하면 ok=true, 하나라도 깨졌으면 ok=false.`
+    + ' ok=false 면 wrong 에 "기대 문구 쪽 낱말"을 그대로 적어라 — 이미지에 잘못 그려진 글자가 아니라, 원래 이렇게 나왔어야 하는 낱말이다.'
+    + ' 예: 기대가 "짙은"인데 이미지에 "질은"이 그려졌으면 wrong=["짙은"].'
+    + ' JSON: {"ok":false,"wrong":["짙은"]}',
+    { maxOutputTokens: 200, signal, visionPaths: [imagePath] },
   ).catch(() => null);
-  return j?.ok !== false;
+  const ok = j?.ok !== false;
+  const wrong = Array.isArray(j?.wrong)
+    ? j.wrong.map((w) => String(w ?? '').trim()).filter((w) => w && w.length <= 20).slice(0, 5)
+    : [];
+  return { ok, wrong };
+}
+
+/**
+ * 깨진 낱말을 뜻이 같은 다른 말로 바꾼다(순수 적용 — 무엇으로 바꿀지는 부르는 쪽이 정한다).
+ *
+ * 왜 낱말을 바꾸는가. 이미지 모델이 특정 글자를 못 그리는 것은 재시도로 안 풀린다. 같은 뜻을
+ * 다른 글자로 적으면 한 번에 풀린다 — '짙은'을 '진한'으로 바꾸자 바로 통과했다(2026-09-06).
+ *
+ * points 만 바꾼다. line1 은 키워드 정확 표기가 걸려 있고(ensureKeywordInCopy), line2 는
+ * 영상 상단 캘리와 같은 문구라 여기서 바꾸면 썸네일과 영상이 어긋난다.
+ */
+export function applyCopySwap(copy: ThumbCopy, swaps: ReadonlyMap<string, string>): ThumbCopy {
+  if (!swaps.size) return copy;
+  const fix = (t: string): string => {
+    let out = String(t ?? '');
+    for (const [from, to] of swaps) {
+      const f = String(from ?? '').trim(); const v = String(to ?? '').trim();
+      if (!f || !v || f === v) continue;
+      out = out.split(f).join(v);
+    }
+    return out;
+  };
+  return { ...copy, points: copy.points.map(fix) };
+}
+
+/** 두 번 이상 깨진 낱말 — 한 번은 우연일 수 있지만 두 번은 그 글자를 못 그리는 것이다(순수). */
+export function repeatedlyWrong(rounds: ReadonlyArray<readonly string[]>, min = 2): string[] {
+  const n = new Map<string, number>();
+  for (const r of rounds) for (const w of new Set(r)) n.set(w, (n.get(w) ?? 0) + 1);
+  return [...n.entries()].filter(([, c]) => c >= min).map(([w]) => w);
+}
+
+/**
+ * 깨진 낱말의 동의어를 받는다(부수효과 — LLM). 실패하면 빈 표(종전 동작 유지).
+ *
+ * 바꿀 낱말만 준다 — 문장 전체를 다시 쓰게 하면 뜻이 흘러간다. 실측 사례에서 필요한 것은
+ * '짙은 → 진한' 한 쌍뿐이었다.
+ */
+export async function planCopySwap(wrong: readonly string[], signal?: AbortSignal): Promise<Map<string, string>> {
+  const out = new Map<string, string>();
+  const list = wrong.map((w) => String(w ?? '').trim()).filter(Boolean).slice(0, 5);
+  if (!list.length) return out;
+  const j = await microJSON<{ swaps?: Array<{ from?: unknown; to?: unknown }> }>(
+    stdModel(),
+    '당신은 한국어 카피라이터입니다. JSON 만 출력합니다.',
+    [
+      '이미지 생성 모델이 아래 낱말의 글자를 자꾸 깨뜨려 그린다. 뜻이 같으면서 글자가 다른 말로 바꿔라.',
+      `낱말: ${list.join(', ')}`,
+      '규칙: 뜻이 바뀌면 안 된다. 원래 낱말에 있던 글자를 다시 쓰지 마라. 더 흔하고 쉬운 말을 골라라.',
+      '바꿀 만한 말이 없으면 그 낱말은 목록에서 빼라(억지로 바꾸지 마라).',
+      '예: {"swaps":[{"from":"짙은","to":"진한"}]}',
+      'JSON: {"swaps":[{"from":"원래말","to":"바꿀말"}]}',
+    ].join('\n'),
+    { maxOutputTokens: 300, signal },
+  ).catch(() => null);
+  for (const sw of j?.swaps ?? []) {
+    const from = String(sw?.from ?? '').trim();
+    const to = String(sw?.to ?? '').trim();
+    if (!from || !to || from === to || to.length > 20) continue;
+    if (!list.includes(from)) continue; // 묻지 않은 낱말은 안 바꾼다
+    out.set(from, to);
+  }
+  return out;
 }
 
 /** png → dir/thumbnail.jpg 변환(ffmpeg) — 임시파일에 쓰고 원자적 rename(찢긴 JPEG·부분 기록 방지). */
@@ -143,6 +222,17 @@ export function manifestFirstImage(manifestPath: string): string | null {
  * hookImage 없거나 키 없으면 false(영상 프레임 폴백). QA 2회 실패 시 마지막 생성본 사용(디자인 우선 방침).
  * 작업물은 실행별 고유 디렉터리(.thumb/<run>)에 격리하고 종료 시 정리 — 동시 실행·stale 재사용 방지. 어떤 예외도 밖으로 던지지 않음(폴백 유도).
  */
+/** 썸네일 한글 QA 미해결 표식 파일명 — 발행 게이트가 소비한다(아티팩트와 함께 남아 재시작에도 살아남음). */
+export const THUMB_QA_MARKER = 'thumb-qa-failed.json';
+/** 이 쇼츠의 썸네일이 한글 QA 를 못 넘긴 채 발행 대기 중인가(순수 판독). */
+export function thumbTextQaFailed(dir: string): boolean {
+  try { return fs.existsSync(path.join(dir, THUMB_QA_MARKER)); } catch { return false; }
+}
+/** 표식 제거 — 재생성이 QA 를 통과했을 때. 없으면 무해. */
+function clearThumbQaMarker(dir: string): void {
+  try { fs.rmSync(path.join(dir, THUMB_QA_MARKER), { force: true }); } catch { /* 무해 */ }
+}
+
 export async function generateDesignedThumbnail(input: {
   dir: string; title: string; description: string; titles?: string[]; hookImage: string | null; signal?: AbortSignal;
   /** 핵심 키워드(정확 표기) — copy 미제공 시 planThumbnailCopy 가 line1 라벨로 강제한다. */
@@ -155,14 +245,22 @@ export async function generateDesignedThumbnail(input: {
   const work = path.join(input.dir, '.thumb', `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`);
   try {
     fs.mkdirSync(work, { recursive: true });
-    const copy = input.copy ?? await planThumbnailCopy(input, input.signal);
-    const prompt = buildThumbnailPrompt(copy);
-    const expected = [copy.line1, copy.line2, ...copy.points].filter(Boolean).join(' / ');
+    let copy = input.copy ?? await planThumbnailCopy(input, input.signal);
     const draftPath = path.join(work, 'draft.json');
-    fs.writeFileSync(draftPath, JSON.stringify({ topic: copy.line1, imageSlots: [{ alt: '썸네일', prompt }] }), 'utf-8');
+    // 회차마다 다시 쓴다 — 낱말을 바꾸면 프롬프트도 기대 문구도 같이 바뀌어야 한다.
+    let expected = '';
+    const writeDraft = (): void => {
+      expected = [copy.line1, copy.line2, ...copy.points].filter(Boolean).join(' / ');
+      fs.writeFileSync(draftPath, JSON.stringify({ topic: copy.line1, imageSlots: [{ alt: '썸네일', prompt: buildThumbnailPrompt(copy) }] }), 'utf-8');
+    };
+    writeDraft();
 
     let lastPng: string | null = null;
-    for (let attempt = 0; attempt < 2; attempt++) {
+    const wrongRounds: string[][] = []; // 회차별로 어느 낱말이 깨졌나 — 반복되면 그 글자를 못 그리는 것이다
+    let swapped = false;                // 낱말 교체는 한 번만 — 계속 바꾸면 문구가 흘러간다
+    // 3회로 늘림(2026-09-03) — 한글 자소 깨짐은 흔한 실패라 한 번 더 뽑는 값이 오타 발행보다 싸다.
+    // 실측(short_5b5f7f4231): 썸네일이 "줄자로"를 "좔자로"로 냈고 2회 모두 QA 를 못 넘겼다.
+    for (let attempt = 0; attempt < 3; attempt++) {
       const outDir = path.join(work, `out${attempt}`);
       const manifest = path.join(work, `m${attempt}.json`);
       try {
@@ -173,9 +271,38 @@ export async function generateDesignedThumbnail(input: {
       const png = manifestFirstImage(manifest); // 실패 슬롯이면 null → 이 시도 이미지 안 씀
       if (!png) continue;
       lastPng = png;
-      if (await qaKoreanText(png, expected, input.signal)) { await toThumbnailJpg(png, input.dir, input.signal); return true; }
+      const qa = await qaKoreanText(png, expected, input.signal);
+      if (qa.ok) {
+        await toThumbnailJpg(png, input.dir, input.signal);
+        clearThumbQaMarker(input.dir); // 재생성이 통과했으면 발행 게이트를 연다
+        return true;
+      }
+      wrongRounds.push([...qa.wrong]);
+      console.log('[숏폼]', `썸네일 한글 QA 불합격 — ${attempt + 1}/3회차 재생성${qa.wrong.length ? ` (${qa.wrong.join('·')})` : ''}`);
+      // 같은 낱말이 두 번 깨졌으면 재시도로는 안 풀린다 — 뜻이 같은 다른 말로 바꾼다(2026-09-06).
+      // 실측: '짙은'이 네 번 연속 '질은'으로 나왔고, '진한'으로 바꾸자 한 번에 통과했다.
+      if (!swapped) {
+        const stuck = repeatedlyWrong(wrongRounds);
+        if (stuck.length) {
+          const swaps = await planCopySwap(stuck, input.signal);
+          const next = applyCopySwap(copy, swaps);
+          if (JSON.stringify(next.points) !== JSON.stringify(copy.points)) {
+            copy = next;
+            swapped = true;
+            writeDraft();
+            console.log('[숏폼]', `썸네일 문구 교체 — ${[...swaps].map(([f, t]) => `${f}→${t}`).join(', ')} (모델이 못 그리는 글자)`);
+          }
+        }
+      }
     }
-    if (lastPng) { await toThumbnailJpg(lastPng, input.dir, input.signal); return true; } // QA 못 넘겨도 디자인본 우선
+    if (lastPng) {
+      // QA 를 못 넘겨도 디자인본을 쓴다(영상 프레임 폴백보다 낫다는 방침). 다만 조용히 나가면 안 된다 —
+      // 종전엔 로그가 한 줄도 없어서, 오타가 박힌 썸네일이 발행될 때까지 아무도 몰랐다(실측 2026-09-03).
+      console.log('[숏폼]', `⚠ 썸네일 한글 QA 3회 실패 — 오타 가능성 있는 이미지로 발행됩니다. 발행 전 눈으로 확인하세요: ${path.join(input.dir, 'thumbnail.jpg')}`);
+      await toThumbnailJpg(lastPng, input.dir, input.signal);
+      try { fs.writeFileSync(path.join(input.dir, THUMB_QA_MARKER), JSON.stringify({ expected, at: new Date().toISOString() }, null, 2), 'utf-8'); } catch { /* 표식 실패는 무해 */ }
+      return true;
+    }
     return false;
   } catch { return false; } // 어떤 실패도 밖으로 던지지 않음 — 호출부(완성부·엔드포인트)는 프레임 폴백
   finally { try { fs.rmSync(work, { recursive: true, force: true }); } catch { /* 정리 실패 무해 */ } }

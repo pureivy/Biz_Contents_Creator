@@ -37,18 +37,34 @@ const NAVER_STATS_TIMEOUT_MS = 5 * 60_000;
  * 고정 스크립트 실행 — shell:false(글로브·치환·체이닝 원천 차단), 인자는 전부 리터럴 argv,
  * 타임아웃 SIGKILL, abort 전파, 출력 하드캡. OPENAI_API_KEY 는 env 로만 주입(로그 비노출).
  */
+/**
+ * 블로그 스킬 사전 점검(순수) — 인터프리터·스크립트가 지금 실제로 있는가. 있으면 null, 없으면 사유.
+ *
+ * 실사고(2026-08-31): .env 의 BLOG_PYTHON 이 그날 아침 비워진 Desktop 사본을 가리켜 naver_stats.py 가
+ * 실행조차 안 됐다. runScript 는 진짜 사유를 돌려줬지만 parseStatsOutput 이 RESULT_JSON 없는 출력을
+ * 그냥 null 로 만들어, 성과탭 새로고침이 94개 글에 "표본 없음(발행 초기 집계 지연 가능)"만 남겼다 —
+ * 설정 오류가 '데이터가 아직 없음'으로 읽힌 것이다. 게다가 그 헛시도가 하루 1회 시도 게이트를 소진해
+ * 설정을 고쳐도 그날은 복구되지 않았다. 그래서 호출부가 루프 '전에' 물어볼 수 있는 순수 점검을 노출한다.
+ */
+export function blogSkillProblem(
+  script: string, python = CONFIG.blogPython, scriptsDir = CONFIG.blogScriptsDir,
+): string | null {
+  if (!python) return '블로그 스킬 비활성 — BLOG_PYTHON 미설정';
+  if (!fs.existsSync(python)) return `파이썬 인터프리터 없음: ${python} (.env 의 BLOG_PYTHON 확인)`;
+  const scriptPath = path.join(scriptsDir, script);
+  if (!fs.existsSync(scriptPath)) return `스크립트 없음: ${scriptPath} (.env 의 BLOG_SCRIPTS_DIR 확인)`;
+  return null;
+}
+
 function runScript(
   script: string, args: string[], cwd: string, signal?: AbortSignal,
   opts?: { timeoutMs?: number; env?: Record<string, string> },
 ): Promise<BlogSkillResult> {
   return new Promise((resolve) => {
-    if (!CONFIG.blogPython) {
-      resolve({ ok: false, output: '(블로그 스킬 비활성 — BLOG_PYTHON 미설정)' }); return;
-    }
+    // 사전 점검과 단일 소스 — 여기서 따로 검사하면 두 곳의 판정이 갈린다.
+    const problem = blogSkillProblem(script);
+    if (problem) { resolve({ ok: false, output: `(${problem})` }); return; }
     const scriptPath = path.join(CONFIG.blogScriptsDir, script);
-    if (!fs.existsSync(CONFIG.blogPython) || !fs.existsSync(scriptPath)) {
-      resolve({ ok: false, output: `(스크립트/인터프리터 없음: ${CONFIG.blogPython} · ${scriptPath})` }); return;
-    }
     if (signal?.aborted) { resolve({ ok: false, output: '(취소됨)' }); return; }
     const childEnv: NodeJS.ProcessEnv = { ...process.env, ...(opts?.env ?? {}) };
     if (CONFIG.openaiApiKey) childEnv.OPENAI_API_KEY = CONFIG.openaiApiKey;
@@ -268,10 +284,19 @@ export async function runBlogPublish(roleId: string, arg: string, signal?: Abort
   fs.writeFileSync(finalPath, JSON.stringify(p.finalContent, null, 2), 'utf-8');
   fs.writeFileSync(manifestPath, JSON.stringify(safeManifest, null, 2), 'utf-8');
   const hasSession = !!CONFIG.naverSessionFile && fs.existsSync(CONFIG.naverSessionFile);
+  // 세션 파일이 없으면 dry-run 으로 **조용히** 강등하던 자리(2026-08-31 발견). 강등된 출력은 성공한
+  // 임시저장과 구별되지 않아 에이전트가 "발행했다"고 보고하게 된다 — 사유를 밝히고 멈춘다.
+  // 참고: naver_publish.py 는 --session-file 을 선언만 하고 읽지 않는다(로그인은 NAVER_PROFILE_DIR
+  // 영속 프로필). 즉 이 게이트는 아무도 만들지 않는 파일을 검사하는 셈이라 사실상 항상 막힌다.
+  // 게이트를 프로필 기준으로 바꾸면 이 툴이 실제로 네이버에 쓰게 되므로 그건 사용자 결정 사항이다.
+  if (!p.dryRun && !hasSession) {
+    return `(blog_publish: 네이버 세션 파일이 없어 실행하지 않았습니다 — ${CONFIG.naverSessionFile || 'NAVER_SESSION_FILE 미설정'}.\n`
+      + '검토 탭의 "네이버 비공개 발행"은 브라우저 프로필로 동작하므로 그 경로를 사용하세요.)';
+  }
   const args = ['--final-content', finalPath, '--image-manifest', manifestPath, '--run-dir', cwd];
   if (CONFIG.naverSessionFile) args.push('--session-file', CONFIG.naverSessionFile);
   args.push('--headless');
-  if (p.dryRun || !hasSession) args.push('--dry-run'); // 세션 없으면 실제 접속 안 함
+  if (p.dryRun) args.push('--dry-run');
   const r = await runScript('naver_publish.py', args, cwd, signal);
   const note = dropped ? `\n(주의: 샌드박스 밖 이미지 ${dropped}건 제외 — 업로드 이미지는 샌드박스 하위만 허용)` : '';
   return r.output + note;
@@ -489,6 +514,22 @@ export function parseStatsOutput(output: string): CollectedMetrics | null {
 }
 
 /**
+ * 스크립트 결과 → 수집 결과. RESULT_JSON 이 있으면 파싱하고, 없는데 스크립트가 실패했으면
+ * **실패 사유를 note 에 실어** 빈 결과를 돌려준다(종전엔 통째 null 이라 사유가 증발했다 — 실사고
+ * 2026-08-31: 인터프리터 부재가 "표본 없음(발행 초기 집계 지연 가능)"으로 둔갑). 정상 종료인데
+ * RESULT_JSON 만 없는 경우는 종전대로 null — 그건 '데이터 없음'이지 '실패'가 아니다.
+ */
+export function statsResultFrom(r: BlogSkillResult): CollectedMetrics | null {
+  const parsed = parseStatsOutput(r.output);
+  if (parsed) return parsed;
+  if (r.ok) return null;
+  return {
+    ok: false, views: 0, searchInflow: [], source: 'scrape:naver_advisor',
+    note: r.output.trim().slice(0, 300) || '수집 스크립트 실패(출력 없음)',
+  };
+}
+
+/**
  * 발행된 글 URL 의 성과(조회수·검색 유입 키워드)를 네이버에서 수집한다.
  * 영속 프로필(발행 때 만든 로그인 세션) 재사용 — 미로그인이면 note 로 안내하고 빈 결과(fail-open).
  * runDir 에 캡처 원본(naver_stats_capture.json)을 남겨 추출기 정밀화에 쓴다.
@@ -513,5 +554,5 @@ export async function collectNaverMetrics(
   if (profileDir) env.NAVER_PROFILE_DIR = profileDir;
   const r = await runScript('naver_stats.py', args, runDir, signal, { timeoutMs: NAVER_STATS_TIMEOUT_MS, env });
   pruneNaverProfileCache(profileDir); // 캐시만 정리(세션 보존) — 일일 수집이 프로필을 키우던 주범
-  return parseStatsOutput(r.output);
+  return statsResultFrom(r);
 }

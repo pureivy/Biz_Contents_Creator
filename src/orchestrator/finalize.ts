@@ -15,6 +15,7 @@ import { clearGrounding } from './groundingLedger';
 import { genId } from '../util/ids';
 import type { AssetBundle } from '../output';
 import { generateImagesForDraft } from '../tools/blog_skills';
+import { renderHtml } from '../output/render';
 
 /**
  * 완성된 blog-image-NN.png 파일명들 → 슬롯 번호(NN) 정렬 매니페스트 images 배열(순수).
@@ -158,8 +159,29 @@ export async function finalizeRun(a: FinalizeArgs): Promise<void> {
             if (recovered) fs.writeFileSync(manifestPath, JSON.stringify({ images }, null, 2), 'utf-8');
           } catch { /* 복원 실패는 무해 — 텍스트만 발행 */ }
         }
+        // 실재 반영 재렌더(실사고 2026-08-31) — 위에서 저장한 draft.html 의 <img> 는 '이 런은 이미지를
+        // 생성할 예정'이라는 **예측**(org.ts)으로 찍힌 것이라, 생성이 실패하면 없는 파일을 가리켜 미리보기가
+        // 깨진다(사용자 제보: BLOG_PYTHON 이 삭제된 경로여서 openai_image.py 가 아예 안 돌았다).
+        // 생성 직후 파일을 세어 슬롯 단위로 다시 그린다 — 0장이면 전부 자리표시, 2/3 이면 나머지 한 칸만 자리표시.
+        const readySlots = new Set<number>();
+        try {
+          if (fs.existsSync(imagesDir)) {
+            for (const f of fs.readdirSync(imagesDir)) {
+              const mm = /^blog-image-(\d{2})\.png$/.exec(f);
+              if (mm) readySlots.add(Number(mm[1]) - 1);
+            }
+          }
+        } catch { /* 스캔 실패는 무해 — 아래 재렌더를 건너뛴다 */ }
+        try {
+          fs.writeFileSync(path.join(dir, 'draft.html'),
+            renderHtml(a.assets.draft, { imagesReady: true, readySlots }), 'utf-8');
+        } catch (e) {
+          a.bus.emit(EventType.log, { message: `초안 미리보기 재렌더 실패(무해): ${e instanceof Error ? e.message : String(e)}` });
+        }
         const head = r.output.split('\n')[0];
-        a.bus.emit(EventType.log, { message: `블로그 이미지 — ${head}${recovered ? ` · 매니페스트 복원 ${recovered}장(부분 실패 살림)` : ''}` });
+        const missing = a.assets.draft.imageSlots.length - readySlots.size;
+        a.bus.emit(EventType.log, { message: `블로그 이미지 — ${head}${recovered ? ` · 매니페스트 복원 ${recovered}장(부분 실패 살림)` : ''}`
+          + (missing > 0 ? ` · 미생성 ${missing}장은 자리표시로 표시(깨진 이미지 방지)` : '') });
       }
     } catch (e) {
       a.bus.emit(EventType.log, { message: `블로그 이미지 생성 실패(무해): ${e instanceof Error ? e.message : String(e)}` });

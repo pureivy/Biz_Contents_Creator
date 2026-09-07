@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { describe, it, expect } from 'vitest';
-import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary } from './shortsCommon';
+import { sceneDurationSec, sceneFrames, fmtSrtTime, buildSrt, normalizeSceneKind, resolveClipSrc, cutAtWordBoundary, emptyKindScenes, dropEmptyKinds, bodyKindCoverage, defaultSceneFx, fxSeed, varyLayout } from './shortsCommon';
 
 describe('sceneDurationSec — 오디오가 길이 지배 + 하한 클램프', () => {
   it('오디오 + 꼬리여백(0.6), 하한 2.8', () => {
@@ -228,5 +228,260 @@ describe('normalizeSceneKind — cta takeaways', () => {
 
   it('hook 은 종전대로 kind 만 — takeaways 를 보내도 무시한다', () => {
     expect(normalizeSceneKind({ kind: 'hook', takeaways: [{ when: 'a', then: 'b' }] })).toEqual({ kind: 'hook' });
+  });
+});
+
+describe('normalizeSceneKind — compare(대비 씬, 2026-09-03)', () => {
+  it('양쪽이 다 있으면 그대로 싣는다', () => {
+    const r = normalizeSceneKind({
+      kind: 'compare',
+      bad: { label: '웃자란 가지', note: '꽃눈이 안 앉아요' },
+      good: { label: '짧은 곁가지', note: '여기 열매가 달려요' },
+    });
+    expect(r.kind).toBe('compare');
+    expect(r.compare?.bad.label).toBe('웃자란 가지');
+    expect(r.compare?.good.note).toBe('여기 열매가 달려요');
+  });
+  it('한쪽만 있으면 kind 만 남긴다 — 대비가 성립하지 않는다', () => {
+    expect(normalizeSceneKind({ kind: 'compare', bad: { label: '웃자란 가지' } }))
+      .toEqual({ kind: 'compare' });
+    expect(normalizeSceneKind({ kind: 'compare' })).toEqual({ kind: 'compare' });
+  });
+  it('note 는 선택 — 없으면 필드를 넣지 않는다', () => {
+    const r = normalizeSceneKind({ kind: 'compare', bad: { label: 'A' }, good: { label: 'B' } });
+    expect(r.compare).toEqual({ bad: { label: 'A' }, good: { label: 'B' } });
+  });
+  it('label 14자·note 18자 캡(단어 경계)', () => {
+    const r = normalizeSceneKind({
+      kind: 'compare',
+      bad: { label: '아주 길게 늘어진 웃자란 가지 여러 개', note: '이렇게 되면 꽃눈이 전혀 앉지 않아서 열매가 안 달립니다' },
+      good: { label: 'B' },
+    });
+    expect((r.compare!.bad.label).length).toBeLessThanOrEqual(14);
+    expect((r.compare!.bad.note ?? '').length).toBeLessThanOrEqual(18);
+  });
+  it('이형 페이로드는 kind 만 — 렌더 무중단(fail-open)', () => {
+    expect(normalizeSceneKind({ kind: 'compare', bad: 'x', good: 3 })).toEqual({ kind: 'compare' });
+  });
+});
+
+describe('emptyKindScenes — 선언만 하고 비어 있는 연출 탐지(순수, 2026-09-03)', () => {
+  it('페이로드가 없는 kind 를 집어낸다', () => {
+    expect(emptyKindScenes([
+      { kind: 'hook' },
+      { kind: 'compare' },
+      { kind: 'stat' },
+    ])).toEqual([{ index: 2, kind: 'compare' }, { index: 3, kind: 'stat' }]);
+  });
+  it('채워진 kind 는 잡지 않는다', () => {
+    expect(emptyKindScenes([
+      { kind: 'compare', compare: { bad: { label: 'a' }, good: { label: 'b' } } },
+      { kind: 'stat', stat: { value: 3 } },
+      { kind: 'list', items: ['a', 'b'] },
+      { kind: 'quote', quote: { text: 'x' } },
+      { kind: 'chart', chart: { series: [{ label: 'a', value: 1 }] } },
+    ])).toEqual([]);
+  });
+  it('cta 는 제외 — takeaways 생략이 설계상 허용된다', () => {
+    expect(emptyKindScenes([{ kind: 'cta' }])).toEqual([]);
+  });
+  it('kind 없는 씬은 대상이 아니다', () => {
+    expect(emptyKindScenes([{}, { kind: undefined }])).toEqual([]);
+  });
+  it('빈 items 는 누락으로 본다 — 배열만 있고 항목이 없으면 화면에 안 나온다', () => {
+    expect(emptyKindScenes([{ kind: 'list', items: [] }])).toEqual([{ index: 1, kind: 'list' }]);
+  });
+});
+
+describe('bodyKindCoverage', () => {
+  it('훅·CTA 는 본문에서 뺀다 — 그 둘은 프롬프트가 항상 붙이라 한 자리다', () => {
+    const cov = bodyKindCoverage([{ kind: 'hook' }, {}, { kind: 'stat' }, {}, { kind: 'cta' }]);
+    expect(cov.body).toBe(3);
+    expect(cov.withKind).toBe(1);
+    expect(cov.kinds).toEqual(['stat']);
+  });
+  it('본문이 전부 비면 withKind 0 — 종전 로그가 절대 못 잡던 상태', () => {
+    const cov = bodyKindCoverage([{ kind: 'hook' }, {}, {}, { kind: 'cta' }]);
+    expect(cov.withKind).toBe(0);
+    expect(cov.body).toBe(2);
+  });
+  it('위치로도 가장자리를 뺀다 — 작가가 hook/cta 를 안 붙인 경우', () => {
+    const cov = bodyKindCoverage([{}, { kind: 'list' }, {}]);
+    expect(cov.body).toBe(1);
+    expect(cov.withKind).toBe(1);
+  });
+  it('씬 2개 이하면 본문이 없다', () => {
+    expect(bodyKindCoverage([{ kind: 'hook' }, { kind: 'cta' }]).body).toBe(0);
+    expect(bodyKindCoverage([]).body).toBe(0);
+  });
+});
+
+describe('defaultSceneFx — 편 간 변주', () => {
+  const seedA = fxSeed('short_aaaaaaaaaa');
+  const seedB = fxSeed('short_bbbbbbbbbb');
+
+  it('시드가 없으면 종전 고정 연출 그대로', () => {
+    expect(defaultSceneFx('hook', 0, false)).toEqual({ enter: 'none', move: 'push', intensity: 'strong', accent: 'spotlight' });
+    expect(defaultSceneFx('stat', 2, false)).toEqual({ enter: 'fade', intensity: 'subtle' });
+  });
+  it('같은 시드는 같은 연출 — 재조립해도 화면이 안 바뀐다', () => {
+    for (const i of [0, 1, 2, 3, 4]) {
+      expect(defaultSceneFx('stat', i, false, 9, seedA)).toEqual(defaultSceneFx('stat', i, false, 9, seedA));
+    }
+  });
+  it('편이 다르면 연출 묶음이 갈린다 — 여러 편에 걸쳐 같은 조합만 나오지 않는다', () => {
+    const a = [0, 1, 2, 3, 4, 5].map((i) => JSON.stringify(defaultSceneFx(undefined, i, false, 9, seedA)));
+    const b = [0, 1, 2, 3, 4, 5].map((i) => JSON.stringify(defaultSceneFx(undefined, i, false, 9, seedB)));
+    expect(a).not.toEqual(b);
+  });
+  it('한 편 안에서도 씬끼리 조합이 반복되지 않는다', () => {
+    const seen = [1, 2, 3, 4].map((i) => JSON.stringify(defaultSceneFx(undefined, i, false, undefined, seedA)));
+    expect(new Set(seen).size).toBeGreaterThan(1);
+  });
+  it('카드 씬 배경은 절대 strong 이 아니다 — 패널이 주인공이라 시선을 뺏으면 안 된다', () => {
+    for (const seed of [seedA, seedB, fxSeed('x'), fxSeed('y'), fxSeed('z')]) {
+      for (const k of ['stat', 'list', 'quote', 'chart', 'compare'] as const) {
+        for (const i of [1, 2, 3, 4]) {
+          expect(defaultSceneFx(k, i, false, 9, seed)?.intensity).not.toBe('strong');
+        }
+      }
+    }
+  });
+  it('클립 씬은 시드가 있어도 undefined — 클립이 곧 모션', () => {
+    expect(defaultSceneFx('stat', 1, true, 9, seedA)).toBeUndefined();
+  });
+  it('파티클은 한 편에 본문 1곳 + cta 로 제한된다', () => {
+    for (const seed of [seedA, seedB, fxSeed('q')]) {
+      const body = [1, 2, 3, 4, 5].filter((i) => defaultSceneFx(undefined, i, false, 9, seed)?.accent?.startsWith('particles-'));
+      expect(body.length).toBeLessThanOrEqual(1);
+    }
+  });
+});
+
+describe('fxSeed — 하위 비트 함정 회귀', () => {
+  it('접미사가 같은 키들이 서로 다른 하위 비트를 받는다', () => {
+    // FNV-1a 만 쓰던 시절, "…:0" 처럼 끝이 같은 키는 하위 비트가 같아져 서로 다른 두 편이
+    // 5개 씬 연출을 통째로 똑같이 받았다(실측: short_f7da9c2057 vs short_fab8242762).
+    const lows = ['3612565752:0', '3454849696:0', '111:0', '222:0', '333:0'].map((k) => fxSeed(k) % 4);
+    expect(new Set(lows).size).toBeGreaterThan(1);
+  });
+  it('가까운 문자열이 서로 다른 조합으로 갈린다', () => {
+    const keys = Array.from({ length: 200 }, (_, i) => `short_${i.toString(16).padStart(10, '0')}`);
+    const combos = new Set(keys.map((k) => {
+      const s = fxSeed(k);
+      return [0, 1, 2, 3, 4].map((i) => JSON.stringify(defaultSceneFx(i === 0 ? 'hook' : undefined, i, false, 9, s))).join('|');
+    }));
+    // 완벽한 200/200 을 요구하면 취약한 테스트가 된다 — 판박이가 아니라는 것만 못박는다.
+    expect(combos.size).toBeGreaterThan(150);
+  });
+});
+
+describe("defaultSceneFx — 'wipe' 자동 선택 금지", () => {
+  it('어떤 시드·씬에서도 wipe 를 고르지 않는다', () => {
+    // Series 는 씬을 겹치지 않아 와이프의 미개방 영역이 루트 배경(검정)으로 드러난다.
+    // 실측(short_0b062a8f6a): 전환 0.2초간 화면 오른쪽이 순검정이었다.
+    for (let n = 0; n < 60; n++) {
+      const s = fxSeed(`short_${n}`);
+      for (const k of [undefined, 'stat', 'list', 'quote', 'chart', 'compare', 'hook', 'cta'] as const) {
+        for (const i of [0, 1, 2, 3, 4, 5]) {
+          expect(defaultSceneFx(k, i, false, 9, s)?.enter).not.toBe('wipe');
+        }
+      }
+    }
+  });
+});
+
+describe('varyLayout — 자막·제목 배치 미세 변주', () => {
+  const base = { bottomPct: 50, fontPx: 70, hookFontPx: 84, titleTopPct: 5, titleWidthPct: 74 };
+
+  it('시드가 없으면 보정값 그대로', () => {
+    expect(varyLayout(base)).toEqual(base);
+  });
+  it('같은 편은 같은 배치 — 재조립해도 자막이 안 움직인다', () => {
+    expect(varyLayout(base, 'short_a')).toEqual(varyLayout(base, 'short_a'));
+  });
+  it('편이 다르면 배치가 갈린다', () => {
+    const seen = new Set(Array.from({ length: 40 }, (_, i) => JSON.stringify(varyLayout(base, `short_${i}`))));
+    expect(seen.size).toBeGreaterThan(20);
+  });
+  it('안전 하한을 절대 안 넘는다 — 자막이 플랫폼 UI 에 먹히면 변주 이득보다 손해가 크다', () => {
+    for (let i = 0; i < 300; i++) {
+      const v = varyLayout(base, `short_${i}`);
+      expect(v.bottomPct).toBeGreaterThanOrEqual(30);
+      expect(v.fontPx).toBeGreaterThanOrEqual(56);
+      expect(v.hookFontPx).toBeGreaterThanOrEqual(70);
+      expect(v.titleTopPct).toBeGreaterThanOrEqual(3);
+      expect(v.titleWidthPct).toBeGreaterThanOrEqual(64);
+      expect(v.titleWidthPct).toBeLessThanOrEqual(88);
+    }
+  });
+  it('흔들림 폭이 좁다 — 줄바꿈이 바뀔 만큼 크면 안 된다', () => {
+    for (let i = 0; i < 300; i++) {
+      const v = varyLayout(base, `short_${i}`);
+      expect(Math.abs(v.bottomPct - base.bottomPct)).toBeLessThanOrEqual(3);
+      expect(Math.abs(v.fontPx - base.fontPx)).toBeLessThanOrEqual(3);
+      expect(Math.abs(v.hookFontPx - base.hookFontPx)).toBeLessThanOrEqual(4);
+    }
+  });
+  it('보정값이 이미 하한 근처여도 하한 아래로 안 내려간다', () => {
+    const low = { bottomPct: 31, fontPx: 57, hookFontPx: 71, titleTopPct: 3, titleWidthPct: 65 };
+    for (let i = 0; i < 200; i++) {
+      const v = varyLayout(low, `s${i}`);
+      expect(v.bottomPct).toBeGreaterThanOrEqual(30);
+      expect(v.titleTopPct).toBeGreaterThanOrEqual(3);
+    }
+  });
+});
+
+describe('훅 첫 프레임 — 커버가 검게 나오면 안 된다', () => {
+  it('어떤 시드에서도 훅 enter 는 none — 프레임 0 이 커버로 쓰인다', () => {
+    // 실사고(2026-09-03, short_1a95e1e542): 훅이 enter:'fade' 로 뽑혀 프레임 0 이 opacity 0 →
+    // 평균 밝기 8/255. 상단 캘리는 씬 밖 오버레이라 그대로 보여 "검은 배경에 제목만" 이 됐다.
+    // 유튜브 커버(extractFirstFrame)와 릴스 커버가 그 프레임을 쓴다.
+    for (let n = 0; n < 120; n++) {
+      const fx = defaultSceneFx('hook', 0, false, 9, fxSeed(`short_${n}`));
+      expect(fx?.enter).toBe('none');
+    }
+  });
+  it('첫 씬이 kind 없이 와도 마찬가지다', () => {
+    for (let n = 0; n < 60; n++) {
+      expect(defaultSceneFx(undefined, 0, false, 9, fxSeed(`s${n}`))?.enter).toBe('none');
+    }
+  });
+  it('훅 변주는 move·intensity·accent 로만 준다 — 실제로 갈리는지', () => {
+    const seen = new Set(Array.from({ length: 40 }, (_, n) => {
+      const fx = defaultSceneFx('hook', 0, false, 9, fxSeed(`short_${n}`));
+      return `${fx?.move}/${fx?.accent ?? '-'}`;
+    }));
+    expect(seen.size).toBeGreaterThan(1);
+  });
+});
+
+describe('dropEmptyKinds — 못 채운 연출은 떼어 낸다(순수, 2026-09-04)', () => {
+  it('빈 compare 는 kind 가 사라진다 — 남겨 두면 연출·I2V 가 거짓 전제로 돈다', () => {
+    const r = dropEmptyKinds([{ kind: 'hook' }, { kind: 'compare' }, { kind: 'cta' }]);
+    expect(r.dropped).toEqual([2]);
+    expect(r.scenes[1]!.kind).toBeUndefined();
+  });
+  it('채워진 연출은 그대로 둔다', () => {
+    const full = { kind: 'compare' as const, compare: { bad: { label: '가' }, good: { label: '나' } } };
+    const r = dropEmptyKinds([{ kind: 'hook' as const }, full]);
+    expect(r.dropped).toEqual([]);
+    expect(r.scenes[1]!.kind).toBe('compare');
+  });
+  it('cta 는 takeaways 가 없어도 안 뗀다 — 설계상 허용된 생략이다', () => {
+    expect(dropEmptyKinds([{ kind: 'hook' }, { kind: 'list', items: ['가'] }, { kind: 'cta' }]).dropped).toEqual([]);
+  });
+  it('kind 말고는 아무것도 안 건드린다', () => {
+    const r = dropEmptyKinds([{ kind: 'stat', narration: '가', screenText: '나' } as never]);
+    expect(r.scenes[0]).toEqual({ narration: '가', screenText: '나' });
+  });
+  it('원본을 바꾸지 않는다', () => {
+    const src = [{ kind: 'compare' as const }];
+    dropEmptyKinds(src);
+    expect(src[0]!.kind).toBe('compare');
+  });
+  it('여러 개면 모두 뗀다', () => {
+    expect(dropEmptyKinds([{ kind: 'hook' }, { kind: 'stat' }, { kind: 'chart' }, { kind: 'cta' }]).dropped).toEqual([2, 3]);
   });
 });

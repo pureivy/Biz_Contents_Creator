@@ -62,6 +62,8 @@ LLM 코어 (src/llm)      ▼             마크다운 지식베이스
 - **카드뉴스**(`orchestrator/cardnews.ts`, standby 팀) — 기획→디자인→`gpt-image-2`가 **한글 텍스트 포함 카드를 직접 렌더**→비전 QA(오타 검수, 문제 장만 재생성).
 - **숏폼**(`orchestrator/shorts.ts`, standby 팀) — 기획(훅·씬·내레이션)→씬 이미지(무텍스트)→렌더러가 자막 프레임 + **OpenAI TTS 내레이션** + ffmpeg로 **1080×1920 MP4 + srt** 조립.
 - 카드뉴스·숏폼은 블로그 org 런과 **별도 파이프라인**이다. 블로그 초안 완료 후 자동 파생되거나(`AUTO_CARDNEWS`/`AUTO_SHORTS`), 독립 주제로도 만들 수 있다. 자세한 흐름은 8절.
+- **숏폼 렌더는 Remotion**(`remotion/`) — 편마다 필름 룩·자막 등장 모션·편집 기법(컷 빛샘·손그림 밑줄·비교 카드)·노이즈 카메라 드리프트를 시드로 달리 뽑아 '판박이' 지문을 지운다. `pnpm studio`(Remotion Studio)·`pnpm preview`(샘플 props 렌더)로 미리 본다.
+- **소재 보관소·소재 사전**(`src/content/mediaLibrary.ts`·`species.ts`) — 한 번 올려 둔 실촬영 사진·영상이 그 소재의 카드뉴스·숏폼에 자동으로 들어가고, 소재 딱지가 브랜드별 사전(`data/species-<slug>.yaml`)에 축적돼 이미지 앵커(학명·형태)로 쓰인다. 8절 참조.
 
 ### (d) Karpathy "LLM Wiki" — `src/wiki/llmwiki.ts`
 RAG가 아니라 에이전트가 직접 유지하는 **마크다운 지식베이스**. 지식을 1회 컴파일하고 계속 갱신(compounding)한다. 자세한 워크플로우는 6절.
@@ -139,7 +141,9 @@ pnpm start        # TZ=Asia/Seoul tsx src/server/main.ts
 | GET | `/cardnews/:id` · `/cardnews/:id/slides/:name` · `/cardnews/:id/zip` | 상태 · 슬라이드 이미지 · 전체 zip |
 | POST | `/shorts` · `/pieces/:id/shorts` | 숏폼 생성(독립 주제 / 초안 파생) |
 | GET | `/shorts/:id/video` · `/shorts/:id/zip` | MP4 다운로드 · 자산 zip |
-| GET · POST | `/performance` · `/pieces/:id/collect-metrics` | 발행 후 성과 수집·분석 |
+| GET · POST | `/performance` · `/pieces/:id/collect-metrics` | 발행 후 성과 수집·분석(유튜브 애널리틱스 지속률·피드 비중·검색 유입어 포함) |
+| POST | `/performance/refresh/naver` | 네이버 통계 수동 수집(헤드리스 크롬 — 정기 수집은 `NAVER_SYNC_TIME`) |
+| GET | `/shorts/writers` | 숏폼 작가 3인(역할 id·필명·목소리) |
 
 ### 브랜드·위키·승인·자료
 | 메서드 | 경로 | 설명 |
@@ -150,6 +154,7 @@ pnpm start        # TZ=Asia/Seoul tsx src/server/main.ts
 | POST | `/wiki/maintain` · `/wiki/audit` · `/wiki/inject` · `/wiki/reingest` | 자가수선 · 모순감사 · 지식주입 · 재적재 |
 | GET · POST | `/approvals` · `/approvals/:id/decide` | 대기 승인 목록 · 승인/반려 |
 | POST · GET | `/sources` | 자료(.md/.txt/.csv/.json 등) 업로드 → 위키 소스화 |
+| GET · POST · PATCH · DELETE | `/media` · `/media/:id` · `/media/file/:id` | 사진·영상 보관소 — 업로드 시 소재 딱지(`species`)·태그·브랜드를 붙이면 그 소재 콘텐츠에 자동 배정 |
 
 ### 음성·자비스·시스템
 | 메서드 | 경로 | 설명 |
@@ -229,7 +234,11 @@ pnpm start        # TZ=Asia/Seoul tsx src/server/main.ts
 | `AUTO_CYCLE_MINUTES` | `0` | 유휴 자율 사이클 주기(분, 0=off) |
 | `RESEARCH_CYCLE_HOURS` | `24` | 지식 리서치 런 주기(시간, 0=off) |
 | `CONTENT_CADENCE_PER_WEEK` / `CONTENT_READY_CAP` | `3` / `5` | 주당 목표 편수 / 미발행 백로그 캡 |
-| `DAILY_BRIEFING_TIME` / `PERFORMANCE_SYNC_TIME` | `''` / `''` | 일일 브리핑 / 성과 동기화 시각("HH:MM") |
+| `DAILY_BRIEFING_TIME` / `PERFORMANCE_SYNC_TIME` | `''` / `''` | 일일 브리핑 / 성과 동기화(API, 빠름) 시각("HH:MM") |
+| `NAVER_SYNC_TIME` | `03:00` | 네이버 통계 수집(헤드리스 크롬, ~30분·프로필 점유) 시각 — 새벽 1회. 빈값=off |
+| `YOUTUBE_AUTO_DAILY_CAP` / `INSTAGRAM_AUTO_DAILY_CAP` | `1` / `1` | 자율런의 채널별 하루 숏폼 생성 상한(직접 지시 제외, 0=무제한). 없으면 `SHORTS_AUTO_DAILY_CAP` 폴백 |
+| `YOUTUBE_DAILY_CAP` | `1` | 유튜브 하루 업로드 상한(대량생산 신호 억제, 0 이하=무제한) |
+| `FB_AS_CHANNEL` | `false` | 페이스북을 성과 지표의 채널로 셀지(인스타 API 부속 페이지면 off) |
 | `PERFORMANCE_WINDOW_DAYS` | `14` | 발행 후 성과 측정 대기일 |
 | `NOTIFY_AUTO_CYCLE` | `true` | 자율 사이클 완료 알림 |
 | `AGENT_TOOL_LOOP` / `AGENT_MAX_TOOL_CALLS` | `false` / `4` | 능동 다단계 tool-loop / 턴당 호출 캡(1~12) |
@@ -313,6 +322,11 @@ idea → research → draft → ready → published → measured → reflected  
 - **네이버 발행** — 실제로는 SmartEditor **임시저장만** 한다(발행 버튼은 사람이 네이버에서 직접 누른다). 자동 임시저장은 `AUTO_NAVER_DRAFT` + SEO ≥ `NAVER_DRAFT_SEO_MIN`(기본 80)일 때만, 미달이면 자동 리비전 1회 후 수동 검토로 넘긴다.
 - **이미지 생성** — `gpt-image-2`(`openai_image.py` 서브프로세스). 블로그는 이미지 슬롯 확정 시 최대 3장, 카드뉴스는 한글 텍스트 포함 카드를 직접 렌더. OpenAI 키가 없으면 dry-run(계획만)으로 파이프라인을 막지 않는다. 모델이 직접 부르는 `image_generate`는 과금이라 승인 게이트.
 - **카드뉴스·숏폼 파생** — 블로그 초안이 완료·임시저장되면 서버가 같은 주제로 카드뉴스·숏폼 런을 자동 파생한다(`AUTO_CARDNEWS`/`AUTO_SHORTS`). 검토 화면이나 제작실에서 초안 기준으로 "만들기"를 눌러 수동 파생도 가능하다. **리서치 런에는 초안이 없으므로 파생도 일어나지 않는다.**
+- **숏폼 채널 분리·작가 3인** — 유튜브용과 인스타(릴스)용은 **대본부터 다른 편**으로 만든다(같은 원문에서 형제편의 훅·제목을 보여 주고 겹치지 못하게 함). 이미지·상단 자산은 형제끼리 공유해 한 벌만 만든다. 작가는 숏폼팀 역할 3인(`shorts_writer`·`shorts_writer_b`·`shorts_writer_c`, 각자 문체 블록 + 일레븐랩스 목소리)이 돌아가며 맡고, 자율런 편수는 채널별 상한(`*_AUTO_DAILY_CAP`)으로 조인다. 대표 제목 구조가 수렴하면 코드가 막고, 썸네일 QA 미해결·화면 소재 오식별은 발행 게이트에 걸린다.
+- **소재 보관소**(`/media`, 제작실 '보관소' 탭) — 실촬영 사진·영상을 한 번 올려 두면 같은 소재의 카드뉴스·숏폼이 자동으로 꺼내 쓴다. 영상은 길이가 맞는 본문 씬에 구간을 쪼개 얹고(실촬영이 있으면 I2V 는 건너뜀), 사진은 배경·종 레퍼런스로 쓴다. 안 쓴 실촬영 재고는 주제 선정에서 동점 처리 가산점이다.
+- **소재(수종) 사전** — 브랜드별 `data/species-<slug>.yaml`(범용 모드 `data/species.yaml`, 서식은 `assets/species.example.yaml`). 표에 있는 소재는 디렉터 LLM 의 기억 대신 학명·잎·꽃·열매 표를 이미지 앵커로 쓰고, 없으면 종전대로 LLM 이 쓴다(fail-open). 보관소에 딱지를 붙여 올리면 그 이름을 사전이 배운다(아는 소재의 별칭이면 `aliases` 에, 처음 보는 소재면 `auto: true` 항목으로 — 사람이 확인하면 `verified: true`).
+- **씬 움직임(I2V)** — `SHORTS_I2V_MAX_CLIPS`≥1 이면 훅 씬 1컷을 fal.ai 로 움직인다(Veo 3.1 Lite 는 1080p·4초 세로 실측 통과, 클립당 약 $0.20). 실촬영 영상이 있으면 통째로 건너뛴다.
+- **저장소 정리**(`src/util/prune.ts`) — 중간 산출물을 자동으로 지우고 발행 완료 영상은 프록시로 바꿔 증가율을 억제한다.
 
 ---
 
@@ -336,7 +350,8 @@ biz-contents-creator/
 ├── scripts/blog_skills/      # 네이버 발행·OpenAI 이미지 Python 스크립트(venv)
 ├── public/index.html         # 경량 자체 SPA(/lite, 빌드 불필요)
 ├── frontend/                 # React/Vite 프론트(/ 에서 dist 서빙)
-├── assets/                   # company 시드·HWPX 템플릿
+├── assets/                   # company 시드(역할·프롬프트, 숏폼 작가 3인 포함)·HWPX 템플릿·species.example.yaml(소재 사전 서식)
+├── remotion/                 # 숏폼 렌더 컴포지션(AutoShorts)·편집 기법·필름 룩·자막 모션·Pretendard 폰트
 ├── data/                     # 런타임 데이터(GEPA_DATA_DIR) — wiki(두뇌)·agents(직원 학습)·brands·
 │                             #   sessions·cardnews·shorts. **예외 없이 전부 gitignore** — 클론하면
 │                             #   비어 있고, 부팅 시 assets/company 시드에서 조직이 생성된다
@@ -345,7 +360,7 @@ biz-contents-creator/
     ├── server/main.ts        # Hono HTTP + SSE 서버(전 엔드포인트)
     ├── llm/                  # Claude CLI 클라이언트·tier 라우팅·비용 (claudeCli·client·models·setting·cost)
     ├── orchestrator/         # 런 엔진(org·debate·directed)·집필·finalize·카드뉴스·숏폼·에이전트·툴·셸
-    ├── content/              # 브랜드·페르소나·piece·카드뉴스·숏폼 모델
+    ├── content/              # 브랜드·페르소나·piece·카드뉴스·숏폼 모델·소재 보관소(mediaLibrary)·소재 사전(species·speciesLearn)·작가 풀(shortsWriters)
     ├── output/               # 렌더·SEO·네이버 블로그/스마트에디터 포맷·이미지 계획
     ├── agents/               # 회사·역할 정의 + 직원 워크스페이스(자가진화)
     ├── grounding/            # 커넥터: naver·dart·law·youtube·custom
@@ -353,7 +368,7 @@ biz-contents-creator/
     ├── voice/                # STT·TTS·오디오·설정·엔드포인트
     ├── jarvis/               # 자비스 대화형 어시스턴트
     ├── autonomy/             # 자율 스케줄러·정기 브리핑·알림
-    ├── analytics/            # 성과 수집·분석·전략 강화
+    ├── analytics/            # 성과 수집·분석·전략 강화(유튜브 애널리틱스·검색 유입어·인스타 소재 축)
     ├── approvals/            # 승인 라이프사이클(거버넌스)
     ├── secrets/              # 비밀값(네이버 계정 등) 저장소
     ├── research/             # 자율 리서치 주제 발굴
@@ -375,7 +390,7 @@ pnpm test:watch    # 워치 모드
 pnpm typecheck     # tsc --noEmit
 ```
 
-현재 **테스트 40개 파일 · 301개 통과**, `tsc --noEmit` 클린. 헤드리스 벤치(단계별 토큰·tok/s·벽시계)는 `tsx src/bench/bench.ts`.
+현재 **테스트 123개 파일 · 1,887개 통과**, `tsc --noEmit`(루트·remotion) 클린, 프론트 빌드 통과. 헤드리스 벤치(단계별 토큰·tok/s·벽시계)는 `tsx src/bench/bench.ts`.
 
 ---
 
@@ -387,3 +402,21 @@ pnpm typecheck     # tsc --noEmit
 - **비용 보험** — 정액이라도 `data/llm_usage.json` 원장 + `MONTHLY_BUDGET_USD` 캡으로 폭주를 방어한다.
 - **자율은 양보 우선** — 유휴/정기 사이클은 사용자 런이 없을 때만 돌고, 사용자 런 도착 시 즉시 abort로 양보한다.
 - **네이버는 임시저장까지만** — 발행(공개)은 항상 사람이 최종 확인한다. 자동화는 임시저장·SEO 게이트에서 멈춘다.
+
+---
+
+## 부록: 업스트림 동기화 기록
+
+이 저장소는 브랜드를 만들기 **전 단계의 범용 스튜디오**다. 특정 브랜드로 운영 중인 [AI_ContentsCreator](https://github.com/pureivy/AI_ContentsCreator) 의 코드 변경을 주기적으로 가져오되, 브랜드 고유 데이터는 싣지 않는다.
+
+| 항목 | 내용 |
+|---|---|
+| 마지막 동기화 | AI_ContentsCreator `aee25de` (2026-09-07) — 기준점 `8a7ca93`(2026-08-31) 이후 커밋 89개 중 87개 반영 |
+| 건너뛴 것 | `.gitignore` 에서 `data/people.yaml`·`data/species.yaml` 을 git 추적으로 돌리는 2건 — 이 저장소는 `data/` 를 예외 없이 제외한다 |
+| 슬러그 | 업스트림의 `ai-contents-studio` 표기는 전부 `biz-contents-creator` 로 |
+
+**범용화 규칙(가져올 때 손댄 것)**
+- 업스트림이 런타임 `data/company.yaml` 에서만 바꾼 역할 정의(숏폼 작가 b·c 신설, 작가 문체 블록, 수석작가·카드 기획자 지침, 모델 등급 조정)는 **시드 `assets/company/`** 에 옮겼다. 기존 `data/company.yaml` 을 가진 환경은 부팅 시 로더가 작가 b·c 만 시드에서 보강한다(`ensureSeedMembers` — 팀을 지운 환경은 건드리지 않음).
+- 문체 블록·작가 풀에서 원예 특정 예시("마당", "서리 내리기 전", "추위 탓")는 업종 중립 표현으로 바꿨다.
+- 소재(수종) 사전은 전역 `data/species.yaml` 이 아니라 **브랜드별** `data/species-<slug>.yaml` 이고, 파일이 없으면 첫 자동 축적 때 뼈대를 만든다. 업스트림의 수종 31종 데이터는 싣지 않고 `assets/species.example.yaml` 로 서식만 남겼다. 사전 판정 규칙 테스트는 `src/content/__fixtures__/species.yaml` 표본으로 돌고, 실제 사전은 있을 때만 무결성을 검사한다.
+- 일레븐랩스 작가별 목소리 id(`src/content/shortsWriters.ts`)는 계정에 실재해야 한다 — 다른 계정이면 `/v1/voices` 로 바꿔 쓴다.

@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { splitTwoLines, derivePoints, ensureKeywordInCopy, buildThumbnailPrompt } from './shortsThumbnail';
+import { repeatedlyWrong, applyCopySwap, splitTwoLines, derivePoints, ensureKeywordInCopy, buildThumbnailPrompt } from './shortsThumbnail';
 
 describe('splitTwoLines', () => {
   it('단어(공백) 경계에서만 분할 — 어떤 단어도 중간에서 쪼개지 않음', () => {
@@ -59,5 +59,52 @@ describe('derivePoints', () => {
   it('빈 설명·초장문은 제외 → 빈 배열 가능', () => {
     expect(derivePoints('')).toEqual([]);
     expect(derivePoints('가나')).toEqual([]); // 4자 미만 제외
+  });
+});
+
+describe('repeatedlyWrong — 반복해서 깨진 낱말(순수)', () => {
+  it('두 번 이상 나온 낱말만 — 한 번은 우연일 수 있다', () => {
+    expect(repeatedlyWrong([['짙은'], ['짙은']])).toEqual(['짙은']);
+    expect(repeatedlyWrong([['짙은'], ['옆가지']])).toEqual([]);
+  });
+  it('한 회차에 같은 낱말이 여러 번 나와도 한 번으로 센다', () => {
+    expect(repeatedlyWrong([['짙은', '짙은'], ['다른말']])).toEqual([]);
+  });
+  it('세 낱말 중 반복된 것만 고른다', () => {
+    expect(repeatedlyWrong([['짙은', '떼면'], ['짙은', '자랍니다']])).toEqual(['짙은']);
+  });
+  it('빈 입력은 빈 결과', () => {
+    expect(repeatedlyWrong([])).toEqual([]);
+    expect(repeatedlyWrong([[], []])).toEqual([]);
+  });
+});
+
+describe('applyCopySwap — 낱말 교체(순수)', () => {
+  const copy = { line1: '황금사철나무 초록가지', line2: '자르는 위치는?', points: ['짙은 초록가지가 옆가지 눌러요', '잎만 떼면 다시 자랍니다'] };
+
+  it('points 안의 낱말을 바꾼다 — 실측 사례 그대로', () => {
+    const out = applyCopySwap(copy, new Map([['짙은', '진한']]));
+    expect(out.points[0]).toBe('진한 초록가지가 옆가지 눌러요');
+    expect(out.points[1]).toBe('잎만 떼면 다시 자랍니다');
+  });
+
+  it('line1·line2 는 안 바꾼다 — 키워드 정확 표기와 영상 캘리가 걸려 있다', () => {
+    const out = applyCopySwap({ ...copy, line2: '짙은 곳을 자른다' }, new Map([['짙은', '진한']]));
+    expect(out.line1).toBe(copy.line1);
+    expect(out.line2).toBe('짙은 곳을 자른다'); // 영상 상단 캘리와 어긋나면 안 된다
+  });
+
+  it('빈 표면 원본 그대로', () => {
+    expect(applyCopySwap(copy, new Map())).toBe(copy);
+  });
+
+  it('같은 말로 바꾸라거나 빈 값이면 무시', () => {
+    const out = applyCopySwap(copy, new Map([['짙은', '짙은'], ['옆가지', '  ']]));
+    expect(out.points[0]).toBe('짙은 초록가지가 옆가지 눌러요');
+  });
+
+  it('한 낱말이 여러 번 나오면 전부 바꾼다', () => {
+    const c = { ...copy, points: ['짙은 가지와 짙은 잎'] };
+    expect(applyCopySwap(c, new Map([['짙은', '진한']])).points[0]).toBe('진한 가지와 진한 잎');
   });
 });

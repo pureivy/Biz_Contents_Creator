@@ -1,3 +1,4 @@
+import { THEME_MONTHLY_CAP } from '../content/topicThemes';
 import { describe, it, expect } from 'vitest';
 import { pickDiscoverySeeds, pickThemeSeeds, looksLikeGardenQuery } from './discoverySeeds';
 
@@ -42,8 +43,9 @@ describe('pickThemeSeeds — 안 다룬 축부터, 상한 축 제외, 날짜 회
   const TH = [
     { theme: 'A', seeds: ['a1', 'a2'], match: [] }, { theme: 'B', seeds: ['b1'], match: [] }, { theme: 'C', seeds: ['c1', 'c2', 'c3'], match: [] }, { theme: 'D', seeds: ['d1'], match: [] },
   ];
-  it('상한 도달 축(4편)은 빠지고 편수 적은 축이 먼저', () => {
-    const cov = new Map([['A', 4], ['B', 1]]);
+  // 상한을 하드코딩하지 않는다 — 2026-09-01 에 4→5 로 올리자 'A(4편)=상한'이라는 전제가 깨졌다.
+  it('상한 도달 축은 빠지고 편수 적은 축이 먼저', () => {
+    const cov = new Map([['A', THEME_MONTHLY_CAP], ['B', 1]]);
     const out = pickThemeSeeds({ themes: TH, coverage: cov, max: 2, now: new Date('2026-08-27T12:00:00') });
     expect(out).toHaveLength(2);
     expect(out.some((s) => s.startsWith('a'))).toBe(false);

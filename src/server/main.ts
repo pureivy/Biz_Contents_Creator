@@ -45,17 +45,24 @@ import { approvalStore } from '../approvals/store';
 import { isAbort } from '../util/abort';
 import { runRevise } from '../orchestrator/revise';
 import type { FinalPosition } from '../orchestrator/finalize';
+import { claudeCliProblem } from '../llm/claudeCli';
 import { startAutoCycle, proposeContentIdeas, startDaily, researchDue, recordResearchLaunch, rollbackResearchLaunch, proposeResearchMission, autoRunEnabled, setAutoRunEnabled, derivedContentDue, isAutorunDirective, demandGateDecision, speciesCoverageFor } from '../autonomy/scheduler';
 import { execFile } from 'node:child_process';
 import { promisify } from 'node:util';
 import { cardNewsStore, qaPublishBlockReason } from '../content/cardnews';
 import type { CardNews } from '../content/cardnews';
 import { runCardNewsJob, isCardNewsRunning, resolveForcedPreset, repairCardNewsSlides, reviseCardNews } from '../orchestrator/cardnews';
-import { shortsStore } from '../content/shorts';
+import { shortsStore, shortsQaPublishBlockReason } from '../content/shorts';
+import { addMedia, listMedia, updateMedia, removeMedia, mediaDir, matchMedia } from '../content/mediaLibrary';
+import { probeDuration } from '../tools/shortsCommon';
+import { findSpecies, loadSpecies, appendSpecies, appendSpeciesAlias } from '../content/species';
+import { learnSpeciesLabel } from '../content/speciesLearn';
+import { SHORTS_PLATFORMS, canPublishTo, platformLabel, youtubeDailyCapBlock, platformQuotaCommitted, autoDailyCapFor, autoCapApplies, type ShortsPlatform } from '../content/shortsPlatform';
+import { pickWriter, SHORTS_WRITERS } from '../content/shortsWriters';
 import type { Shorts } from '../content/shorts';
 import { runShortsJob, isShortsRunning, reviseShorts } from '../orchestrator/shorts';
-import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame } from '../tools/shortsRender';
-import { generateDesignedThumbnail } from '../orchestrator/shortsThumbnail';
+import { ensureShortsThumbnail, ensureShortsDownload, ensureMetaVideo, extractFirstFrame, archiveShortsVideo } from '../tools/shortsRender';
+import { generateDesignedThumbnail, thumbTextQaFailed } from '../orchestrator/shortsThumbnail';
 import { pieceStore, selectResumablePiece, blogUrlForPiece, planAutoNaverDraft, shouldAutoDeriveOnDecision, cadenceBaselineTs } from '../content/pieces';
 import { isTransientFailure, transientReason } from '../llm/transientError';
 import { toFactGateInfo } from '../content/factGate';
@@ -70,6 +77,7 @@ import { brandThemeCoverage } from '../analytics/discoverySeeds';
 import type { Piece } from '../content/pieces';
 import { ingestMetrics } from '../analytics/reinforce';
 import { syncShortsPerformance, syncShortsMetaPerformance, shortsPerfStale, shortsMetaPerfStale } from '../analytics/shortsPerf';
+import { shortsFeedShare } from '../analytics/ytAnalytics';
 import { harvestTopicVerdicts, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
 import { seriesGateForText, ensureSeriesLabels } from '../analytics/seriesLedger';
 import { refreshTrendSnapshot } from '../analytics/trendSignal';
@@ -82,20 +90,24 @@ import { recordFollowersSnapshot, readSnapshots } from '../analytics/followers';
 import { buildTitleTimingReport } from '../analytics/titleTiming';
 import { promiseStore } from '../content/promises';
 import { refreshNaverIndexingCache } from '../analytics/naverIndexing';
+import { shouldArchiveShortsVideo } from '../content/shortsArchive';
+import { humanBytes } from '../util/prune';
 import { parseManualMetrics, readMetrics, latestMetrics, latestMetricsBySource, viewsSeriesFor, metricSeriesFor, appendMetrics, naverTrackingDue, topInflow, latestDwell, latestLikes, latestTouch, sameKstDay } from '../analytics/performance';
 import { fetchBlogSympathy } from '../analytics/naverSympathy';
 import { naverAttemptAt, markNaverAttempt } from '../analytics/naverAttempts';
 import { readStrategy } from '../analytics/strategy';
 import { getCollector, setCollector } from '../analytics/collector';
 import { notify, notifyConfigured } from '../autonomy/notify';
-import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
+import { notifyBlogReady, notifyShortsReady, notifyCardnewsReady, notifyYoutubeUploaded, contentReadyNotifyEnabled, studioBase } from '../autonomy/contentNotify';
 import { startTelegramBot } from '../autonomy/telegramBot';
 import { buildBriefing } from '../autonomy/briefing';
 import { extractText, isSupportedExt } from '../tools/extract';
-import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics } from '../tools/blog_skills';
+import { publishDraftToNaver, naverPublishCreds, collectNaverMetrics, blogSkillProblem } from '../tools/blog_skills';
 import { coerceBlogDraft } from '../output/smarteditor';
 import type { MetricSample } from '../analytics/performance';
 import { classifyAndAssign, getStatuses, reassign, setIngestStatus } from '../tools/classify';
+import { firstJson } from '../tools/classify';
+import { llm } from '../llm/client';
 import { transcribe, sttAvailable } from '../voice/stt';
 import { synthesize, listKoreanVoices, ttsAvailable } from '../voice/tts';
 import { getVoiceSettings, setVoiceSettings } from '../voice/setting';
@@ -302,6 +314,8 @@ interface LaunchOpts {
   keyword?: string;
   /** 첨부 이미지 경로(/runs/attachments 저장분) — 런 시작 전 vision 분석 결과를 주제에 병합. */
   images?: string[];
+  /** 첨부 영상 경로 — 파생 쇼츠의 씬 클립. 본 런(텍스트)에는 안 쓴다. */
+  videos?: string[];
   /** 첨부 문서 경로(/runs/attachments 저장분) — 런 시작 전 텍스트 추출(길면 micro 요약)해 주제에 병합. */
   docs?: string[];
   /** 지식 리서치 런 — 집필·포장 생략(draft.json 없음 → piece 승격·캘린더 오염 자연 차단). 두뇌 적재·직원 학습 전용. */
@@ -408,6 +422,16 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
   handle.brand = activeBrandSlug() || undefined;
   if (opts.revise) handle.revise = true; // 개정 런 표식 — 기록에서 원본 생성과 구분(중복 오해 방지)
   if (opts.pieceId) handle.pieceId = opts.pieceId; // 본편 생산 런 표식 — 완료 자율런의 기록 표시 기준
+  // 첨부 실사진을 원고에 남긴다(2026-09-04) — 종전엔 vision 으로 '읽고' 버려서, 파생 쇼츠가
+  // 사용자가 올린 사진을 화면에 쓸 방법이 없었다. 경로를 붙여 두면 파생이 그대로 집어 쓴다.
+  if (opts.pieceId && (opts.images?.length || opts.videos?.length)) {
+    try {
+      pieceStore().update(opts.pieceId, {
+        ...(opts.images?.length ? { assets: opts.images.slice(0, 8) } : {}),
+        ...(opts.videos?.length ? { videoAssets: opts.videos.slice(0, 4) } : {}),
+      });
+    } catch { /* 무해 */ }
+  }
   RUNS.set(id, handle);
   if (opts.auto) lastAutoRun = { ts: handle.created_ts, topic };
   evictRuns();
@@ -513,6 +537,8 @@ function launchRun(topic: string, opts: LaunchOpts = {}): string {
 // ── 컴포저 멀티모달(이미지 첨부) ──
 // 업로드(POST /runs/attachments)가 저장 경로를 돌려주고, 클라이언트가 POST /runs 의 images 로 회신한다.
 const ATTACH_DIR = path.join(CONFIG.dataDir, 'attachments');
+/** 씬 클립으로 쓸 수 있는 영상 확장자 — ffmpeg/OffthreadVideo 가 다루는 범위로 좁힌다. */
+const VIDEO_EXTS = new Set(['.mp4', '.mov', '.m4v', '.webm']);
 
 async function attachmentsHandler(c: Context): Promise<Response> {
   const body = await c.req.parseBody({ all: true });
@@ -522,26 +548,32 @@ async function attachmentsHandler(c: Context): Promise<Response> {
   fs.mkdirSync(ATTACH_DIR, { recursive: true });
   const images: string[] = [];
   const docs: string[] = [];
+  // 영상 첨부(2026-09-04) — 파생 쇼츠가 씬 클립으로 쓴다. 문서 추출기·비전과는 무관한 경로라
+  // 따로 센다. 용량 상한이 큰 이유는 폰으로 찍은 몇 초짜리도 수십 MB 이기 때문.
+  const videos: string[] = [];
   // 무통보 탈락 금지 — 저장 못 한 파일은 사유와 함께 회신, 클라이언트가 사용자에게 고지·확인한다.
   const skipped: Array<{ file: string; reason: string }> = [];
   for (const f of files) {
     const isImg = f.type.startsWith('image/');
+    const isVid = !isImg && (f.type.startsWith('video/') || VIDEO_EXTS.has(path.extname(f.name || '').toLowerCase()));
     if (isImg && images.length >= 8) { skipped.push({ file: f.name, reason: '이미지 개수 상한(8장) 초과' }); continue; } // claude CLI vision 상한과 일치
-    if (!isImg && docs.length >= 8) { skipped.push({ file: f.name, reason: '문서 개수 상한(8건) 초과' }); continue; }
-    if (!isImg && !isSupportedExt(f.name || '')) { skipped.push({ file: f.name, reason: '미지원 형식' }); continue; } // 문서는 자료실 추출기 지원 형식만
-    if (f.size > (isImg ? 10_000_000 : 25_000_000)) { skipped.push({ file: f.name, reason: `용량 초과(${isImg ? '10MB' : '25MB'})` }); continue; } // 문서 25MB — /sources 와 동일
-    const ext = (path.extname(f.name || '').toLowerCase() || (isImg ? '.png' : '')).slice(0, 12);
+    if (isVid && videos.length >= 4) { skipped.push({ file: f.name, reason: '영상 개수 상한(4개) 초과' }); continue; } // 씬 수를 넘겨 받아 봐야 못 쓴다
+    if (!isImg && !isVid && docs.length >= 8) { skipped.push({ file: f.name, reason: '문서 개수 상한(8건) 초과' }); continue; }
+    if (!isImg && !isVid && !isSupportedExt(f.name || '')) { skipped.push({ file: f.name, reason: '미지원 형식' }); continue; } // 문서는 자료실 추출기 지원 형식만
+    const cap = isImg ? 10_000_000 : isVid ? 200_000_000 : 25_000_000;
+    if (f.size > cap) { skipped.push({ file: f.name, reason: `용량 초과(${isImg ? '10MB' : isVid ? '200MB' : '25MB'})` }); continue; }
+    const ext = (path.extname(f.name || '').toLowerCase() || (isImg ? '.png' : isVid ? '.mp4' : '')).slice(0, 12);
     // 원 파일명 stem 보존 — 문서 추출기의 확장자 판별·주제 병합 블록의 표시명에 쓰인다.
     const stem = path.basename(f.name || 'file', path.extname(f.name || ''))
       .replace(/[^\w가-힣.\-]+/g, '_').slice(0, 40) || 'file';
     const name = `${Date.now()}-${createHash('sha1').update(`${f.name}:${f.size}:${images.length + docs.length}`).digest('hex').slice(0, 8)}-${stem}${ext}`;
     await fs.promises.writeFile(path.join(ATTACH_DIR, name), Buffer.from(await f.arrayBuffer())); // 비동기 — 25MB 동기 쓰기의 이벤트 루프 정지 방지
-    (isImg ? images : docs).push(path.join(ATTACH_DIR, name));
+    (isImg ? images : isVid ? videos : docs).push(path.join(ATTACH_DIR, name));
   }
-  if (!images.length && !docs.length) {
-    return c.json({ error: '저장 가능한 파일이 없습니다 — 이미지(10MB)·문서 PDF/HWP/HWPX/DOCX/PPTX/XLSX/텍스트(25MB)만 지원', skipped }, 400);
+  if (!images.length && !docs.length && !videos.length) {
+    return c.json({ error: '저장 가능한 파일이 없습니다 — 이미지(10MB)·영상 mp4/mov/webm(200MB)·문서 PDF/HWP/HWPX/DOCX/PPTX/XLSX/텍스트(25MB)만 지원', skipped }, 400);
   }
-  return c.json({ ok: true, paths: [...images, ...docs], images, docs, skipped });
+  return c.json({ ok: true, paths: [...images, ...videos, ...docs], images, videos, docs, skipped });
 }
 
 // 첨부 문서 → 텍스트 추출(자료실 /sources 와 동일 추출기) 후 주제에 병합. 짧으면 원문 그대로,
@@ -823,17 +855,27 @@ app.post('/runs/:id/message', (c) => c.json({ ok: true }));
 /** 활성 브랜드의 자료만 통과 — 범용 모드(활성 없음)면 브랜드 태그 없는 자료만. 탭 전환의 핵심. */
 function brandMatch(x: { brand?: string }): boolean { return (x.brand ?? '') === activeBrandSlug(); }
 
-/** 파생 콘텐츠 요약(카드뉴스·숏폼) — 캘린더 배지·검토 미리보기·성과 컬럼용. 최신 1건씩. */
+/**
+ * 파생 콘텐츠 요약(카드뉴스·숏폼) — 캘린더 배지·검토 미리보기·성과 컬럼용.
+ * 숏폼은 2026-09-03 채널 분리로 글당 2건(유튜브용·인스타용)이 된다. shortsList 가 전부이고,
+ * shorts 는 최신 1건 하위호환 필드다(캘린더 배지·성과 컬럼이 아직 단건을 본다).
+ */
+interface DerivedShorts { id: string; stage: string; durationSec?: number; running: boolean; platform?: ShortsPlatform }
 interface DerivedSummary {
   cardnews?: { id: string; stage: string; slides?: number; running: boolean };
-  shorts?: { id: string; stage: string; durationSec?: number; running: boolean };
+  shorts?: DerivedShorts;
+  shortsList?: DerivedShorts[];
 }
 function derivedSummary(pieceId: string): DerivedSummary {
   const out: DerivedSummary = {};
   const cn = cardNewsStore().list().find((x) => x.sourcePieceId === pieceId); // list() 최신순 → 첫 매치 = 최신
   if (cn) out.cardnews = { id: cn.id, stage: cn.stage, slides: cn.slides, running: isCardNewsRunning(cn.id) };
-  const sh = shortsStore().list().find((x) => x.sourcePieceId === pieceId);
-  if (sh) out.shorts = { id: sh.id, stage: sh.stage, durationSec: sh.durationSec, running: isShortsRunning(sh.id) };
+  const mine = shortsStore().list().filter((x) => x.sourcePieceId === pieceId)
+    .map((x): DerivedShorts => ({ id: x.id, stage: x.stage, durationSec: x.durationSec, running: isShortsRunning(x.id), platform: x.platform }));
+  // 채널 순서 고정(유튜브 → 인스타 → 레거시) — 목록이 폴링마다 뒤집히지 않게.
+  const rank = (p?: ShortsPlatform): number => (p === 'youtube' ? 0 : p === 'instagram' ? 1 : 2);
+  mine.sort((a, b) => rank(a.platform) - rank(b.platform));
+  if (mine.length) { out.shortsList = mine; out.shorts = mine[0]; }
   return out;
 }
 
@@ -898,7 +940,7 @@ function pieceDeleteHandler(c: Context): Response {
     return c.json({ error: '이 카드의 런이 실행 중입니다 — 취소 후 삭제하세요.' }, 409);
   }
   if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') {
-    return c.json({ error: '네이버 임시저장이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
+    return c.json({ error: '네이버 비공개 발행이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
   }
   if (COLLECT_JOBS.get(id)?.status === 'running') {
     return c.json({ error: '성과 수집이 진행 중입니다 — 완료 후 삭제하세요.' }, 409);
@@ -1181,9 +1223,26 @@ function shortsActorNames(): { writer?: string; director?: string } {
   } catch { return {}; }
 }
 
+/**
+ * 이번 편 작가 배정(2026-09-03) — 최근 쓴 작가를 피해 돌린다. 작가마다 문체 지침과 목소리가 다르다.
+ * 종전에는 company.yaml 의 shorts_writer 한 명(유하린)이 148편을 전부 썼고 목소리도 하나였다.
+ * 디렉터는 그대로 한 명이다(연출 톤까지 나누면 검증할 축이 너무 많아진다 — 필요하면 다음 단계).
+ */
+function assignShortsWriter(): { writer: string; writerId: string; director?: string } {
+  const recent = shortsStore().list().slice(0, 12).map((x) => x.writerId); // list() 최신순
+  const w = pickWriter(recent);
+  return { writer: w.name, writerId: w.id, director: shortsActorNames().director };
+}
+
 // 숏폼 잡을 '런'으로 등록 — 유하린·서준영의 스폰·작업·지표가 오피스 뷰에 흐르고,
 // 런 취소 → abort 로 잡 중단, 완료 시 이벤트 영속(리플레이). launchCardNewsRun 과 동일 패턴.
-function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: string; sceneCount?: number; sourceFlagged?: string[] } = {}): string {
+// opts 는 runShortsJob 으로 그대로 흘러간다 — 실촬영 소재·승계 원본까지 여기 선언해 둔다.
+// 종전엔 sourceBody·sceneCount·sourceFlagged 만 적혀 있었는데, 호출부가 스프레드로 넘기는
+// userAssets/userVideos/inheritFrom 이 타입 검사를 비껴가 통과하고 있었다(2026-09-04 발견).
+function launchShortsRun(shortsId: string, topic: string, opts: {
+  sourceBody?: string; sceneCount?: number; sourceFlagged?: string[];
+  userAssets?: string[]; userVideos?: string[]; inheritFrom?: string;
+} = {}): string {
   const id = runId();
   const bus = createBus(id);
   const abort = new AbortController();
@@ -1220,16 +1279,42 @@ function launchShortsRun(shortsId: string, topic: string, opts: { sourceBody?: s
   return id;
 }
 
+/**
+ * 제작실 직접 생성(주제만) — 블로그 파생과 같은 계약으로 채널별 편을 만든다(2026-09-04).
+ *
+ * 종전엔 platform 없는 레코드 하나만 만들었다. 그러면 채널 지침이 안 붙고(platformPlanGuide
+ * 가 빈 문자열), 한 파일이 두 채널 모두에 올라갈 수 있다 — 09-03 에 없앤 '같은 물건을 두
+ * 채널에' 형태로 되돌아간다. 그게 유튜브 대량생산 지문의 축이었다.
+ *
+ * 파생 경로(shortsFromPieceHandler)와 같이 첫 채널이 원편(자산 생성), 나머지는 그 자산을
+ * 승계하고 낭독만 제 작가 목소리로 새로 뜬다 — 편당 비용은 이미지가 지배하므로 한 벌만 만든다.
+ */
 async function shortsCreateHandler(c: Context): Promise<Response> {
-  const b = await c.req.json<{ topic?: string; keyword?: string; scenes?: number; force?: boolean }>()
-    .catch(() => ({}) as { topic?: string; keyword?: string; scenes?: number; force?: boolean });
+  const b = await c.req.json<{ topic?: string; keyword?: string; scenes?: number; force?: boolean; platform?: ShortsPlatform }>()
+    .catch(() => ({}) as { topic?: string; keyword?: string; scenes?: number; force?: boolean; platform?: ShortsPlatform });
   const topic = (b.topic ?? '').trim();
   if (!topic) return c.json({ error: 'topic 이 필요합니다' }, 400);
   const sim = noveltyViolation(topic, b.keyword, b.force);
   if (sim) return c.json(noveltyError(sim), 409);
-  const short = shortsStore().create({ topic, keyword: b.keyword, ...shortsActorNames() });
-  const run = launchShortsRun(short.id, topic, { sceneCount: b.scenes });
-  return c.json({ short, run_id: run });
+  // 제작실 직접 생성도 보관소를 본다 — 블로그 글이 없을 뿐, 주제는 있다.
+  const media = mediaForTopic({ text: `${b.keyword ?? ''} ${topic}` });
+  const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
+  const made: Shorts[] = []; let primaryId = ''; let firstRun = '';
+  for (const platform of targets) {
+    const short = shortsStore().create({ topic, keyword: b.keyword, platform, ...assignShortsWriter() });
+    const inheritFrom = primaryId; // 루프 변수 고정 — 클로저가 나중 값을 보면 안 된다
+    const start = (inherit: boolean): void => {
+      const run = launchShortsRun(short.id, topic, {
+        ...(b.scenes ? { sceneCount: b.scenes } : {}), ...media,
+        ...(inherit && inheritFrom ? { inheritFrom } : {}),
+      });
+      if (!firstRun) firstRun = run;
+    };
+    if (inheritFrom) startAfterPrimary(inheritFrom, short.id, start); else start(false);
+    made.push(short);
+    if (!primaryId) primaryId = short.id;
+  }
+  return c.json({ short: made[0], shorts: made, run_id: firstRun });
 }
 
 // 블로그 초안 → 숏폼 파생(공용) — 검토 탭 버튼·네이버 저장 성공 자동 훅이 공유.
@@ -1249,7 +1334,102 @@ function sourceFlaggedClaims(runId: string | undefined): string[] {
   } catch { return []; }
 }
 
-function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false): { short: Shorts } | { error: string } {
+/**
+ * 형제(다른 채널) 대본이 나온 뒤 두 번째 런을 출발시킨다(2026-09-03).
+ * 동시에 띄우면 둘 다 서로를 못 봐서 같은 축의 대본이 나온다(실측: 09-03 시험에서 '형제 대본 없음' 2건,
+ * 문체만 갈리고 알맹이가 같았다). 레코드는 지금 만들어 UI 에 보이게 하고, 출발만 미룬다.
+ * 서버가 도중에 죽어도 부팅 복구 스윕이 planning 상태를 재개하므로 유실되지 않는다.
+ */
+/**
+ * 형제편 출발 대기(2026-09-03 개편) — 원편이 '자산을 다 만든 뒤' 출발한다.
+ *
+ * 종전엔 원편의 '대본만' 나오면 출발했다. 두 편이 각자 대본·이미지를 만들되 각도만 안 겹치게 하는
+ * 설계였기 때문이다. 이제 형제편은 원편 자산을 통째로 물려받으므로, 이미지·클립까지 다 나온 뒤여야
+ * 한다. 판정 기준은 원편의 stage — ready 면 완성, error 면 물려받을 게 없으니 자기가 새로 만든다.
+ */
+/** 원편 완성 대기 상한 — 넘으면 형제편이 자체 생성한다(생성이 멈추는 것보다 낫다). */
+const PRIMARY_WAIT_MS = 25 * 60_000;
+function startAfterPrimary(primaryId: string, selfId: string, start: (inherit: boolean) => void): void {
+  const began = Date.now();
+  const tick = (): void => {
+    const p = shortsStore().get(primaryId);
+    const waited = Date.now() - began;
+    if (p?.stage === 'ready') { start(true); return; }
+    if (p?.stage === 'error' || !p) {
+      console.log(`[숏폼] 원편 실패·부재 — ${selfId} 는 자체 생성으로 진행`);
+      start(false); return;
+    }
+    if (waited > PRIMARY_WAIT_MS) {
+      console.log(`[숏폼] 원편 완성 대기 시간 초과(${Math.round(PRIMARY_WAIT_MS / 60000)}분) — ${selfId} 는 자체 생성으로 진행`);
+      start(false); return;
+    }
+    setTimeout(tick, 10_000);
+  };
+  setTimeout(tick, 10_000);
+}
+
+/**
+ * 주제에 맞는 실촬영 소재 고르기 — 컴포저 첨부가 있으면 그걸, 없으면 보관소에서 꺼낸다.
+ *
+ * **숏폼을 만드는 모든 경로가 여기를 지나야 한다**(사용자 확정 2026-09-04: "자율런이든 직접
+ * 실행이든 제작실 생성이든, 주제가 나오면 보관소를 살펴보고 맞는 수종이 있으면 써야 한다").
+ * 종전엔 블로그 파생 경로에만 붙어 있어서, 제작실에서 주제만 넣어 만든 편과 서버 재시작 뒤
+ * 자동 재개된 편은 보관소를 아예 안 봤다.
+ *
+ * 수종 별칭은 사전이 판정한다 — '음나무'로 올린 영상이 '엄나무' 편에서 배제된 적이 있다.
+ */
+/**
+ * 보관소 딱지로 수종 사전을 배운다(2026-09-05, 사용자 요청: "보관소에 넣으면 자동으로 사전에").
+ *
+ * 왜 '별칭'이 핵심인가. 사장님이 '백일홍'으로 올린 영상이 '배롱나무' 편에서 배제됐다.
+ * 여기서 새 수종으로 넣으려 하면 학명(Lagerstroemia indica)이 배롱나무와 겹쳐서
+ * appendSpecies 가 조용히 건너뛴다 — 사고가 그대로 남는다. 배울 것은 별칭이다.
+ *
+ * 기다리지 않는다. 업로드 응답은 바로 나가고 학습은 뒤에서 돈다 — 사전은 다음 런에 쓰이지,
+ * 이 응답에 쓰이지 않는다. 실패는 learnSpeciesLabel 안에서 전부 삼킨다.
+ */
+function learnMediaLabel(label: string | undefined): void {
+  const name = String(label ?? '').trim();
+  if (!name) return;
+  void learnSpeciesLabel(name, {
+    list: () => loadSpecies(),
+    known: (n) => !!findSpecies(n),
+    addAlias: (sp, alias) => appendSpeciesAlias(sp, alias),
+    addSpecies: (e) => appendSpecies(e),
+    log: (m) => console.log('[보관소]', m),
+    ask: async (question) => {
+      const res = await llm.chat({
+        // standard 등급을 쓴다. micro(haiku)로 실측하니 '도장나무'(회양목의 이명)를 한 번은
+        // '모르겠다', 한 번은 '참나무'라고 답했다 — 틀린 별칭은 그 수종 그림을 통째로 망친다.
+        // sonnet 은 같은 질문에 회양목으로 맞혔다. 업로드마다 한 번뿐인 호출이라 값이 싸다.
+        model: resolveAssignment()['standard'],
+        messages: [{ role: 'user', content: question }],
+        maxOutputTokens: 500, temperature: 0, think: false, format: 'json',
+      });
+      return firstJson<unknown>(res.text ?? '');
+    },
+  }).then((msg) => { if (msg) console.log('[보관소]', msg); });
+}
+
+function mediaForTopic(opts: {
+  brand?: string; text: string; attached?: string[]; attachedVideos?: string[];
+}): { userAssets?: string[]; userVideos?: string[] } {
+  try {
+    const text = opts.text.trim();
+    const sp = findSpecies(text)?.name;
+    const lib = listMedia(opts.brand ?? (activeBrandSlug() || undefined));
+    const canon = (n: string): string => findSpecies(n)?.name ?? n;
+    const imgs = opts.attached?.length ? opts.attached
+      : matchMedia(lib, { species: sp, text, kind: 'image', limit: 8, canon }).map((m) => m.file);
+    const vids = opts.attachedVideos?.length ? opts.attachedVideos
+      : matchMedia(lib, { species: sp, text, kind: 'video', limit: 4, canon }).map((m) => m.file);
+    if (!opts.attached?.length && imgs.length) console.log('[숏폼]', `보관소 사진 ${imgs.length}장 사용 — ${sp ?? '범용'}`);
+    if (!opts.attachedVideos?.length && vids.length) console.log('[숏폼]', `보관소 영상 ${vids.length}개 사용 — ${sp ?? '범용'}`);
+    return { ...(imgs.length ? { userAssets: imgs } : {}), ...(vids.length ? { userVideos: vids } : {}) };
+  } catch { return {}; } // fail-open — 소재 조회 실패로 생성이 멈추면 안 된다
+}
+
+function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false, platform?: ShortsPlatform, inheritFromPrimary?: string): { short: Shorts } | { error: string } {
   const piece = pieceStore().get(pieceId);
   if (!piece) return { error: 'unknown piece' };
   if (!piece.runId) return { error: '초안이 아직 없습니다.' };
@@ -1260,18 +1440,41 @@ function deriveShortsFromPiece(pieceId: string, scenes?: number, auto = false): 
   } catch { /* 아래에서 거절 */ }
   if (!body) return { error: '초안 본문(draft.json)을 읽을 수 없습니다.' };
   const short = shortsStore().create({
-    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, ...shortsActorNames(),
+    topic: piece.title, keyword: piece.keyword, sourcePieceId: piece.id, auto, platform, ...assignShortsWriter(),
   });
-  launchShortsRun(short.id, piece.title, { sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId) });
+  const start = (inherit: boolean): void => {
+    launchShortsRun(short.id, piece.title, {
+      sourceBody: body, sceneCount: scenes, sourceFlagged: sourceFlaggedClaims(piece.runId!),
+      // 사용자가 컴포저에 첨부한 실사진 — 씬 배경·스타일 레퍼런스로 쓴다.
+      // 컴포저 첨부가 우선, 없으면 보관소에서 이 주제에 맞는 소재를 꺼내 쓴다(2026-09-04).
+      // 보관소의 값어치가 여기 있다 — 한 번 올려 두면 그 수종 콘텐츠마다 자동으로 화면에 들어간다.
+      ...mediaForTopic({
+        brand: piece.brand, text: `${piece.keyword ?? ''} ${piece.title}`,
+        attached: piece.assets, attachedVideos: piece.videoAssets,
+      }),
+      // 승계는 원편이 ready 일 때만 — 실패했으면 물려받을 자산이 없으니 자체 생성으로 떨어진다.
+      ...(inherit && inheritFromPrimary ? { inheritFrom: inheritFromPrimary } : {}),
+    });
+  };
+  if (inheritFromPrimary) startAfterPrimary(inheritFromPrimary, short.id, start); else start(false);
   return { short };
 }
 async function shortsFromPieceHandler(c: Context): Promise<Response> {
   const id = c.req.param('id') ?? '';
   if (!pieceStore().get(id)) return c.json({ error: 'unknown piece' }, 404);
-  const b = await c.req.json<{ scenes?: number }>().catch(() => ({}) as { scenes?: number });
-  const r = deriveShortsFromPiece(id, b.scenes);
-  if ('error' in r) return c.json({ error: r.error }, r.error === 'unknown piece' ? 404 : 409);
-  return c.json({ short: r.short });
+  const b = await c.req.json<{ scenes?: number; platform?: ShortsPlatform }>().catch(() => ({}) as { scenes?: number; platform?: ShortsPlatform });
+  // platform 미지정이면 채널별로 각각 만든다(자동 파생과 같은 계약). 응답의 short 는 하위호환 유지.
+  const targets: ShortsPlatform[] = b.platform ? [b.platform] : [...SHORTS_PLATFORMS];
+  // 자동 파생과 같은 계약 — 첫 채널이 원편, 나머지는 그 자산 승계(수동·자동이 갈라지면 안 된다).
+  const made: Shorts[] = []; let firstError = ''; let primaryId = '';
+  for (const platform of targets) {
+    const r = deriveShortsFromPiece(id, b.scenes, false, platform, primaryId || undefined);
+    if ('error' in r) { firstError ||= r.error; continue; }
+    made.push(r.short);
+    if (!primaryId) primaryId = r.short.id;
+  }
+  if (!made.length) return c.json({ error: firstError || '파생 실패' }, firstError === 'unknown piece' ? 404 : 409);
+  return c.json({ short: made[0], shorts: made });
 }
 
 function shortsListHandler(c: Context): Response {
@@ -1287,10 +1490,28 @@ function shortsGetHandler(c: Context): Response {
   return x ? c.json({ short: { ...x, running: isShortsRunning(x.id) } }) : c.json({ error: 'unknown short' }, 404);
 }
 // MP4 서빙 — Range 지원(Safari 는 Range 없이는 <video> 재생 거부, Chrome 도 시킹에 필요).
+// 발행 완료 쇼츠의 원본 정리(2026-08-31 사용자 확정) — 유튜브·릴스가 둘 다 확인되면 final.mp4 를
+// 저용량 preview.mp4 로 바꾼다. 실측상 원본이 건당 50MB 로 단일 최대 항목이었다(144건 7.2G).
+// 판정은 순수 함수(shouldArchiveShortsVideo)에 두고, 여기선 기동·기록만 한다. 전 구간 fail-open —
+// 정리가 실패해도 발행 흐름은 건드리지 않는다(원본이 남을 뿐).
+function maybeArchiveShortsVideo(id: string): void {
+  const s = shortsStore().get(id);
+  if (!s || !shouldArchiveShortsVideo(s)) return;
+  void archiveShortsVideo(shortsStore().dirFor(id)).then((freed) => {
+    if (!freed) return; // 재인코딩 실패·이미 없음 — 기록도 남기지 않아 다음에 재시도된다
+    shortsStore().update(id, { videoArchivedTs: new Date().toISOString() });
+    console.log('[쇼츠]', `${(s.title ?? s.topic ?? id).slice(0, 30)} — 발행 완료, 원본을 미리보기용으로 교체(${humanBytes(freed)} 회수)`);
+  }).catch(() => { /* 무해 */ });
+}
+
 function shortsVideoHandler(c: Context): Response {
   const id = c.req.param('id') ?? '';
   if (!shortsStore().get(id)) return c.json({ error: 'unknown short' }, 404);
-  const fp = path.join(shortsStore().dirFor(id), 'final.mp4');
+  // 발행 완료 건은 원본(final.mp4)이 저용량 preview.mp4 로 교체돼 있다(2026-08-31 정리 정책).
+  // 원본 우선, 없으면 프록시 — 미리보기는 어느 쪽이든 재생된다.
+  const sdir = shortsStore().dirFor(id);
+  let fp = path.join(sdir, 'final.mp4');
+  if (!fs.existsSync(fp)) fp = path.join(sdir, 'preview.mp4');
   let size = 0;
   try { size = fs.statSync(fp).size; } catch { return c.json({ error: 'video not found' }, 404); }
   const range = c.req.header('range');
@@ -1392,7 +1613,11 @@ app.get('/youtube/oauth/start', (c) => {
   u.searchParams.set('response_type', 'code');
   // readonly 추가(2026-07-29) — 구독자 수 조회(channels.list mine=true)용. 기존 연결 토큰은 upload 뿐이라
   // 재연결 전까지는 팔로워 추적이 API 키 공개 통계 폴백으로 동작한다(analytics/followers).
-  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly');
+  // yt-analytics.readonly 추가(2026-09-03) — 트래픽 소스별 조회(Shorts 피드 유입이 실제로 오는지)와
+  // 평균 시청 지속률 조회용. Data API 의 viewCount 만으로는 '노출이 끊긴 것'과 '보다가 이탈한 것'을
+  // 구분할 수 없다(09-02 신작 조회 붕괴 진단에서 드러난 계측 공백). 스코프 추가는 재동의가 필요하므로
+  // 기존 토큰은 그대로 두고, 사용자가 '채널 연결'을 다시 눌러야 애널리틱스 조회가 켜진다.
+  u.searchParams.set('scope', 'https://www.googleapis.com/auth/youtube.upload https://www.googleapis.com/auth/youtube.readonly https://www.googleapis.com/auth/yt-analytics.readonly');
   u.searchParams.set('access_type', 'offline');
   u.searchParams.set('prompt', 'consent');
   u.searchParams.set('state', nonce);
@@ -1439,6 +1664,23 @@ async function shortsReviseHandler(c: Context): Promise<Response> {
   console.log(`[발행담당] 숏폼 수정 요청 반영 — ${id} 씬 ${r.changedScenes.join(',') || '문구없음'}${r.regenScenes.length ? ` · 배경 ${r.regenScenes.join(',')}` : ''}${r.titleChanged ? ' · 제목' : ''}${r.titleArtChanged ? ' · 캘리' : ''}`);
   return c.json(r);
 }
+/**
+ * 숏폼 작가 페르소나 목록(2026-09-03) — 직원 화면이 조직도(company.yaml 역할)만 읽어서 새 작가가
+ * 안 보인다는 제보 반영. 이들은 별도 에이전트가 아니라 shorts_writer 역할의 필명·문체·목소리다
+ * (집필 규칙 2,098자는 한 역할에 모여 있고, 셋으로 복제하면 규칙이 갈라진다).
+ * 그래서 조직도에 '직원'으로 넣지 않고 이 목록으로 따로 보여 준다. 편성 실적은 최근 30편 기준.
+ */
+app.get('/shorts/writers', (c) => {
+  const recent = shortsStore().list().filter(brandMatch).slice(0, 30);
+  return c.json({
+    writers: SHORTS_WRITERS.map((w) => ({
+      id: w.id, name: w.name, voiceNote: w.voiceNote, styleGuide: w.styleGuide,
+      recentCount: recent.filter((s) => s.writerId === w.id).length,
+    })),
+    recentTotal: recent.length,
+  });
+});
+
 app.post('/shorts/:id/revise', shortsReviseHandler);
 app.post('/api/shorts/:id/revise', shortsReviseHandler);
 
@@ -1465,7 +1707,24 @@ app.post('/shorts/:id/youtube', async (c) => {
   if (s.stage !== 'ready') return c.json({ error: '완성(ready) 상태가 아닙니다' }, 409);
   // 길이 상한 발행 게이트(2026-08-20 하드 캡) — 어떤 경로(수정요청 재조립·구버전 잔존분)로 ready 가 됐든 초과본 발행 차단.
   if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
+  // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
+  // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
+  {
+    const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), force);
+    if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+  }
   if (s.youtubeUrl) return c.json({ error: '이미 업로드됨', url: s.youtubeUrl }, 409); // 중복 영상·쿼터 낭비 방지
+  // 채널 게이트(2026-09-03) — 인스타 전용으로 만든 대본을 유튜브에 올리지 않는다(레거시 미지정분은 통과).
+  if (!canPublishTo(s.platform, 'youtube')) {
+    return c.json({ error: `${platformLabel(s.platform)} 전용 숏폼입니다 — 유튜브에는 유튜브용 대본을 올리세요` }, 409);
+  }
+  // 하루 상한(사용자 확정 2026-09-03: 1편) — 대량생산 신호를 줄이는 게 목적이라 발행 지점에서 막는다.
+  // 브랜드별 채널이므로 같은 브랜드 업로드만 센다. 인스타(메타)에는 적용하지 않는다.
+  const capBlock = youtubeDailyCapBlock(
+    shortsStore().list().filter((x) => (x.brand ?? '') === (s.brand ?? '')), Date.now(), CONFIG.youtubeDailyCap,
+  );
+  if (capBlock) return c.json({ error: capBlock }, 409);
   if (ytPublishInFlight.has(id)) return c.json({ error: '이미 업로드 처리 중입니다' }, 409);
   ytPublishInFlight.add(id);
   try {
@@ -1482,8 +1741,18 @@ app.post('/shorts/:id/youtube', async (c) => {
     });
     if (!r.ok) return c.json({ error: r.error }, 502);
     shortsStore().update(id, { youtubeId: r.videoId, youtubeUrl: r.url, youtubeTs: new Date().toISOString() });
+    maybeArchiveShortsVideo(id); // 릴스도 이미 올라갔으면 여기서 원본 정리
     if (r.thumbnailError) console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 24)} — 썸네일 미적용: ${r.thumbnailError}`);
     console.log(`[발행담당] ${(s.title ?? s.topic).slice(0, 30)} — 유튜브 비공개 업로드 완료 (${publisherName()})`);
+    // 텔레그램 알림(사용자 요청 2026-08-31) — 발행 계열 중 유튜브만. 종전엔 콘솔 로그뿐이라 스튜디오를
+    // 보고 있지 않으면 올라간 사실을 알 수 없었다. 릴스·인스타는 제외(세트당 3건이면 소음).
+    // url 이 없으면 알리지 않는다 — 링크 없는 "업로드 완료"는 확인할 방법이 없어 알림 가치가 없다.
+    if (r.url) {
+      void notifyYoutubeUploaded({
+        id, topic: s.topic, title: s.title, brand: s.brand,
+        durationSec: s.durationSec, scenes: s.scenes, url: r.url,
+      });
+    }
     return c.json({ ok: true, url: r.url, thumbnailError: r.thumbnailError });
   } finally {
     ytPublishInFlight.delete(id);
@@ -1853,6 +2122,17 @@ app.post('/shorts/:id/meta', async (c) => {
   if ((s.durationSec ?? 0) > CONFIG.shortsMaxDurationSec) return c.json({ error: `길이 상한 초과(${s.durationSec}초 > ${CONFIG.shortsMaxDurationSec}초) — ✍수정요청으로 대본을 줄인 뒤 발행하세요` }, 409);
   // 완료 판정 = 릴스 id + 실제 퍼머링크 + (페이지 연결 시) FB 릴스 id. 홈 URL 잔재만 있으면 재시도가 링크를 보강하게 통과.
   // FB 페이지를 나중에 연결한 경우 IG 완료만으로 막으면 페북 릴스는 영구히 못 올라간다 → FB 미게시면 통과.
+  // 채널 게이트(2026-09-03) — 유튜브 전용 대본을 릴스로 내보내지 않는다(레거시 미지정분은 통과).
+  if (!canPublishTo(s.platform, 'instagram')) {
+    return c.json({ error: `${platformLabel(s.platform)} 전용 숏폼입니다 — 릴스에는 인스타용 대본을 올리세요` }, 409);
+  }
+  // 썸네일 QA 미해결 게이트(실사고 2026-09-03: 오타 썸네일이 조용히 발행) — 카드뉴스와 동일 방식.
+  // 사용자 확인(force) 또는 썸네일 재생성으로 해제된다. 모든 발행 경로가 이 라우트를 지난다.
+  {
+    const force = !!(await c.req.json<{ force?: boolean }>().catch(() => ({} as { force?: boolean }))).force;
+    const qaBlock = shortsQaPublishBlockReason(thumbTextQaFailed(shortsStore().dirFor(id)), force);
+    if (qaBlock) return c.json({ error: qaBlock, thumb_qa_unresolved: true }, 409);
+  }
   const shortsAcct = getMetaAccount(s.brand ?? '');
   const fbLinked = !!(shortsAcct.pageId && shortsAcct.pageToken); // 발행기와 동일 판정(토큰까지)
   const metaDir = shortsStore().dirFor(id);
@@ -1893,6 +2173,7 @@ app.post('/shorts/:id/meta', async (c) => {
     if (r.fbError) console.log(`[발행담당] 페북 릴스 실패 사유: ${r.fbError}`);
     // fbError 는 200 과 함께(IG 릴스는 실제 공개됨 — 502 로 뒤집으면 실패 위장).
     if (r.fbCoverError) console.log(`[발행담당] 페북 릴스 커버 미적용: ${r.fbCoverError}`);
+    maybeArchiveShortsVideo(s.id); // 유튜브도 이미 올라갔으면 여기서 원본 정리
     return c.json({ ok: true, igPermalink: r.igPermalink ?? s.igPermalink, fbReelId: r.fbReelId ?? s.fbReelId, fbError: r.fbError ?? r.fbCoverError });
   } finally {
     metaPublishInFlight.delete(id);
@@ -1911,6 +2192,7 @@ app.post('/shorts/meta-reconcile', async (c) => {
     .map((s) => ({ id: s.id, title: s.title ?? s.topic ?? '', igReelId: s.igReelId }));
   const matches = matchOrphanReels(targets, reels);
   for (const m of matches) shortsStore().update(m.shortsId, { igReelId: m.reelId, igPermalink: m.permalink, metaPublishedTs: m.timestamp });
+  for (const m of matches) maybeArchiveShortsVideo(m.shortsId); // 감지 경로로 릴스가 확인된 건도 동일 정리
   if (matches.length) console.log(`[발행담당] 릴스 재조정 — 브랜드 '${brand || '범용'}': ${matches.length}건 백필(라이브 릴스 ${reels.length}개)`);
   return c.json({ ok: true, reconciled: matches.length, reelsOnIg: reels.length, items: matches.map((m) => ({ shortsId: m.shortsId, permalink: m.permalink })) });
 });
@@ -2023,7 +2305,7 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
   }
   // 네이버 임시저장이 도는 중이면 개정 금지 — 저장 결과가 옛 내용과 뒤엉키는 것 방지(상호 가드).
   if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') {
-    return c.json({ error: '네이버 임시저장이 진행 중입니다 — 완료 후 수정 요청하세요.' }, 409);
+    return c.json({ error: '네이버 비공개 발행이 진행 중입니다 — 완료 후 수정 요청하세요.' }, 409);
   }
   let baseBody = '';
   try {
@@ -2038,13 +2320,19 @@ async function pieceReviseHandler(c: Context): Promise<Response> {
 app.post('/pieces/:id/revise', pieceReviseHandler);
 app.post('/api/pieces/:id/revise', pieceReviseHandler);
 
-// 네이버 임시저장(검토 탭) — 완성 초안을 실제 네이버 SmartEditor 에 임시저장한다(발행 아님).
+// 네이버 비공개 발행(검토 탭) — 완성 초안을 네이버에 **비공개로 실제 발행**한다(전체공개는 사람이 전환).
+// 이름이 오래 '임시저장'이었던 이유: 2026-08-28 에 파이썬 기본 모드가 private_publish 로 바뀌었는데
+// UI·상태값·필드명은 옛 이름 그대로였다. 사용자 확인(2026-08-31) 후 사람이 보는 문구만 실제 동작에
+// 맞췄다 — 저장 필드(naverDraftUrl/naverDraftTs)와 status 상수(DRAFT_SAVED)는 호환 위해 유지.
+// 비공개 발행이 실패하면 파이썬이 임시저장으로 폴백하므로, 완료 문구는 privatePublished 로 갈라 쓴다.
 // Playwright 브라우저(기본 headful — 최초 로그인/캡차를 사람이 처리)가 최대 15분 걸릴 수 있어
 // 백그라운드 잡으로 돌리고, 프론트는 GET 으로 폴링한다. 사용자 클릭이 곧 승인(신뢰 경로).
 interface NaverDraftJob {
   status: 'running' | 'saved' | 'failed';
   startedTs: string; endedTs?: string;
   url?: string; adminUrl?: string; error?: string; dryRun: boolean;
+  /** 비공개로 실제 발행됐는가(false = 임시저장 폴백) — 완료 문구·링크 안내가 갈린다. */
+  privatePublished?: boolean;
   /** 자동 게이트가 기동한 잡의 담당자 표기(발행 담당) — 수동(검토 탭 버튼) 잡은 비움. */
   actor?: string;
 }
@@ -2061,6 +2349,9 @@ type NaverDraftStart = { ok: true } | { error: string; status: 400 | 404 | 409 }
 /** 블로그 본문 확정 → 카드뉴스·숏폼 자동 파생(piece당 각 1회, AUTO_CARDNEWS / AUTO_SHORTS 로 켜고 끔).
  *  호출 지점: 네이버 임시저장 성공 훅 + 자동 임시저장 off 시 ready 확정(maybeAutoNaverDraft). 가드가 멱등을 보장. */
 function autoDeriveSet(id: string, title: string): void {
+  // 자율런 상한을 걸 대상인가 — 사용자가 주제를 넣어 돌린 글, "오토런 지시"로 시작한 글은 밖이다.
+  // (사용자 확정 2026-09-04. 종전엔 이 구분이 없어 직접 돌린 글의 숏폼이 통째로 누락됐다.)
+  const capped = autoCapApplies(pieceStore().get(id));
   if (CONFIG.autoCardNews && !cardNewsStore().list().some((x) => x.sourcePieceId === id)) {
     const dc = deriveCardNewsFromPiece(id);
     console.log('error' in dc
@@ -2069,14 +2360,37 @@ function autoDeriveSet(id: string, title: string): void {
   }
   // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 길이 상한 등으로 실패한 파생이 그 글의
   // 쇼츠를 영구 결손시키지 않게. 단 같은 글 실패 2회부터는 재파생 중단(계속 실패하는 소재 폭주 방지).
-  if (CONFIG.autoShorts && (() => {
-    const mine = shortsStore().list().filter((x) => x.sourcePieceId === id);
-    return !mine.some((x) => x.stage !== 'error') && mine.filter((x) => x.stage === 'error').length < 2;
-  })()) {
-    const ds = deriveShortsFromPiece(id);
-    console.log('error' in ds
-      ? `[숏폼] 자동 파생 실패 — ${title.slice(0, 25)}: ${ds.error}`
-      : `[숏폼] 자동 파생 시작 — ${title.slice(0, 30)} (${ds.short.id})`);
+  // 채널별로 따로 만든다(2026-09-03 사용자 확정) — 같은 글에서 유튜브용·인스타용 대본을 각각 생성.
+  // 점유·실패 판정은 채널별로 센다. 한쪽이 실패해도 다른 쪽은 만들어져야 한다.
+  if (CONFIG.autoShorts) {
+    // 채널별 편은 만들되 비싼 상단(대본·이미지·클립·캘리)은 한 벌만 만든다(2026-09-03 사용자 확정).
+    // 종전엔 채널마다 독립 런이라 이미지가 두 벌이었다 — 편당 비용은 이미지가 지배한다.
+    // 분리의 원래 근거("중복 콘텐츠 회피")는 유튜브가 인스타를 못 본다는 점에서 성립하지 않았다.
+    // 첫 채널이 원편(자산 생성), 나머지는 그 자산을 승계하고 낭독만 제 작가 목소리로 새로 뜬다.
+    const need = SHORTS_PLATFORMS.filter((platform) => {
+      const mine = shortsStore().list().filter((x) => x.sourcePieceId === id && x.platform === platform);
+      // error 레코드는 점유로 안 본다(2026-08-20 하드 캡 리뷰) — 다만 같은 글·같은 채널 2회 실패면 중단.
+      if (mine.some((x) => x.stage !== 'error') || mine.filter((x) => x.stage === 'error').length >= 2) return false;
+      // 채널별 하루 상한(사용자 확정 2026-09-03: 유튜브 1편·인스타 2편) — 자율런에만 건다.
+      // 발행에서만 막으면 2~3편 만들어 1편만 올리고 나머지를 버리게 된다(LLM·이미지 비용).
+      // '자율런'의 범위는 autoCapApplies 가 정한다 — 사용자가 직접 돌린 글의 파생은 상한 밖이고,
+      // 숏폼 버튼을 직접 누른 생성(shortsFromPieceHandler)도 애초에 이 함수를 안 거친다.
+      if (capped && platformQuotaCommitted(shortsStore().list(), Date.now(), autoDailyCapFor(platform, CONFIG.shortsAutoDailyCap), platform)) {
+        console.log(`[숏폼] 자동 파생 건너뜀(${platformLabel(platform)}) — 오늘 몫 소진(자율런 상한 ${autoDailyCapFor(platform, CONFIG.shortsAutoDailyCap)}편) · ${title.slice(0, 25)}`);
+        return false;
+      }
+      return true;
+    });
+    // 유튜브가 상한으로 빠지면 인스타가 원편이 된다 — 그러지 않으면 인스타 생산이 통째로 멈춘다.
+    let primaryId = '';
+    for (const platform of need) {
+      const ds = deriveShortsFromPiece(id, undefined, false, platform, primaryId || undefined);
+      if ('error' in ds) { console.log(`[숏폼] 자동 파생 실패(${platformLabel(platform)}) — ${title.slice(0, 25)}: ${ds.error}`); continue; }
+      console.log(primaryId
+        ? `[숏폼] 자동 파생 시작(${platformLabel(platform)}·승계) — ${title.slice(0, 30)} (${ds.short.id}) · 원편 완성 대기`
+        : `[숏폼] 자동 파생 시작(${platformLabel(platform)}·원편) — ${title.slice(0, 30)} (${ds.short.id})`);
+      if (!primaryId) primaryId = ds.short.id;
+    }
   }
 }
 
@@ -2085,7 +2399,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
   const piece = pieceStore().get(id);
   if (!piece) return { error: 'unknown piece', status: 404 };
   if (!piece.runId) return { error: '초안이 아직 없습니다.', status: 409 };
-  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return { error: '이미 네이버 임시저장이 진행 중입니다.', status: 409 };
+  if (NAVER_DRAFT_JOBS.get(id)?.status === 'running') return { error: '이미 네이버 비공개 발행이 진행 중입니다.', status: 409 };
   // 실런은 브라우저를 여니 프로필 뮤텍스 필요 — 수집·타 임시저장·일일동기화와 상호 배제.
   if (!dryRun && naverProfileBusy) {
     return { error: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.`, status: 409 };
@@ -2110,11 +2424,11 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
 
   const job: NaverDraftJob = { status: 'running', startedTs: new Date().toISOString(), dryRun, actor: opts.actor };
   NAVER_DRAFT_JOBS.set(id, job);
-  if (!dryRun) naverProfileBusy = `임시저장:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
+  if (!dryRun) naverProfileBusy = `비공개 발행:${piece.title.slice(0, 20)}`; // ── 동기 구간 끝(뮤텍스 획득)
   void publishDraftToNaver(sessionDir, draft, { dryRun, brand: pubBrand }).then((r) => {
     job.endedTs = new Date().toISOString();
     if (r.ok) {
-      job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl;
+      job.status = 'saved'; job.url = r.draftUrl; job.adminUrl = r.adminUrl; job.privatePublished = r.privatePublished;
       if (r.issues.length) job.error = r.issues.join(' · '); // PARTIAL — 저장은 됐지만 일부 문제(이미지 누락 등)
       // 잡 도는 사이 리비전으로 runId 가 바뀌었다면 이 결과는 옛 내용 — 현재 초안의 기록으로 남기지 않는다.
       if (!dryRun && pieceStore().get(id)?.runId === runIdAtStart) {
@@ -2150,7 +2464,7 @@ function startNaverDraftJob(id: string, opts: { dryRun?: boolean; actor?: string
     // 자동(발행 담당) 잡 종료 알림 — 채널 설정 시에만. 수동 잡은 사용자가 화면에서 폴링하므로 제외.
     if (opts.actor && !dryRun && notifyConfigured()) {
       void notify({
-        title: `📗 ${opts.actor} — 네이버 임시저장 ${job.status === 'saved' ? '완료' : '실패'} · ${piece.title.slice(0, 40)}`,
+        title: `📗 ${opts.actor} — 네이버 ${job.privatePublished ? '비공개 발행' : '임시저장'} ${job.status === 'saved' ? '완료' : '실패'} · ${piece.title.slice(0, 40)}`,
         body: job.url ?? job.adminUrl ?? job.error ?? '',
       });
     }
@@ -2176,11 +2490,11 @@ function pieceNaverDraftStatusHandler(c: Context): Response {
   const job = NAVER_DRAFT_JOBS.get(id);
   // 잡 없음 = 진행 중 아님 — 'idle'. 과거 저장 이력(url)은 참고용으로만 싣는다(재시작으로 잡이
   // 유실된 폴링이 옛 'saved' 를 '방금 완료'로 오인하지 않도록 status 는 idle 고정).
-  if (!job) return c.json({ status: 'idle', url: piece.naverDraftUrl, saved_ts: piece.naverDraftTs });
+  if (!job) return c.json({ status: 'idle', url: piece.naverDraftUrl, saved_ts: piece.naverDraftTs, private_published: !!piece.privateUrl });
   return c.json({
     status: job.status, url: job.url ?? piece.naverDraftUrl, admin_url: job.adminUrl,
     error: job.error, dry_run: job.dryRun, started_ts: job.startedTs, ended_ts: job.endedTs,
-    actor: job.actor,
+    actor: job.actor, private_published: !!job.privatePublished,
   });
 }
 
@@ -2420,12 +2734,28 @@ function performanceHandler(c: Context): Response {
     .filter((x) => !!x.youtubeTs || !!x.metaPublishedTs)
     .map((x) => {
       const yt = x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:') : null;
+      // 애널리틱스 표본은 따로 읽는다(2026-09-04) — 'youtube:' 접두로 뭉뚱그리면 더 자주 도는
+      // youtube:api 표본이 최신이라 시청비율·유입 경로가 매번 가려진다. 수집은 되는데 화면에
+      // 안 나오던 원인이 이것이다(실측: 26편에 기록이 있는데 성과 탭은 조회·좋아요만 보여줬다).
+      const ytA = x.youtubeTs ? latestMetricsBySource(x.id, 'youtube:analytics') : null;
       const ig = x.metaPublishedTs ? latestMetricsBySource(x.id, 'meta:ig') : null;
       const fbv = x.fbReelId ? latestMetricsBySource(x.id, 'meta:fb') : null;
       return {
         id: x.id, title: x.title || x.topic,
         // 업로드일은 채널별로 분리 — 유튜브 섹션은 youtubeTs, 릴스 섹션은 metaPublishedTs(양쪽 발행 시 상단 ts 는 최신값으로 정렬용).
-        youtube: x.youtubeTs ? { url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null, reflected: !!x.perfReflected, stale: shortsPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs } : null,
+        youtube: x.youtubeTs ? {
+          url: x.youtubeUrl ?? null, views: yt?.views ?? null, likes: yt?.likes ?? null,
+          reflected: !!x.perfReflected, stale: shortsPerfStale(x, perfNow, perfDays),
+          series: viewsSeriesFor(x.id, 'youtube:'), ts: x.youtubeTs,
+          // 시청 지속률·쇼츠 피드 비중(2026-09-03 수집 시작) — 조회수만으로는 '노출이 끊긴 것'과
+          // '보다가 이탈한 것'을 못 가른다. 애널리틱스 집계 지연(2일)으로 최근 편은 null 이다.
+          avgViewPct: ytA?.avgViewPct ?? null,
+          feedShare: ytA?.traffic ? shortsFeedShare(ytA.traffic) : null,
+          measuredAt: ytA?.measuredAt ?? null,
+          // 이 편으로 들어온 검색어(2026-09-04) — 이 채널에서 검색은 유일하게 안 죽은 유입이다.
+          // 어떤 말로 찾아오는지가 다음 주제를 고르는 근거가 된다.
+          inflow: topInflow(readMetrics(x.id), 5),
+        } : null,
         meta: x.metaPublishedTs ? { permalink: x.igPermalink ?? null, views: ig?.views ?? null, likes: ig?.likes ?? null, reflected: !!x.metaPerfReflected, stale: shortsMetaPerfStale(x, perfNow, perfDays), series: viewsSeriesFor(x.id, 'meta:ig'), ts: x.metaPublishedTs } : null,
         // 페북 릴스 — 게시된 조각만(fbReelId). 지표는 비디오 노드에서 수집한 meta:fb 표본.
         // 커버 미적용 여부(coverPending)도 함께 보내 성과 탭에서 바로 보이게 한다(발행 탭까지 가지 않아도 알게).
@@ -2459,7 +2789,8 @@ function performanceHandler(c: Context): Response {
     })
     .sort((a, b) => b.ts.localeCompare(a.ts));
   return c.json({
-    refreshBusy: perfRefreshBusy, // 새로고침 백그라운드 수집 진행 여부 — 프론트 폴링 종료 판정
+    refreshBusy: perfRefreshBusy, // 빠른 갱신(유튜브·메타) 진행 여부 — 프론트 폴링 종료 판정
+    naverBusy: naverRefreshBusy || !!naverProfileBusy, // 네이버 수집·브라우저 작업 진행 여부(임시저장 대기 안내용)
     strategy: {
       winners: s.winners.slice(0, 20), subNiches: s.subNiches, measuredPieces: s.measuredPieces,
       // 채널 학습(쇼츠·릴스·카드뉴스) — 키워드 점수표가 아니라 직원 강화가 남긴 교훈 문장(위키 performance
@@ -2480,6 +2811,8 @@ function performanceHandler(c: Context): Response {
     channels: {
       shorts: shortsRows,
       cardnews: cardRows,
+      // 페이스북을 채널로 셀 것인가 — 화면이 이 값을 보고 페북 열·카드를 접는다(CONFIG 주석 참조).
+      fbAsChannel: CONFIG.fbAsChannel,
       summary: {
         shortsYtViews: shortsRows.reduce((n, r) => n + (r.youtube?.views ?? 0), 0),
         reelsViews: shortsRows.reduce((n, r) => n + (r.meta?.views ?? 0), 0),
@@ -2504,42 +2837,65 @@ function performanceHandler(c: Context): Response {
 }
 app.get('/performance', performanceHandler);
 app.get('/api/performance', performanceHandler);
-// 성과 즉시 재수집(대시보드 새로고침 버튼) — 쇼츠 유튜브·릴스·카드뉴스 메타는 순수 API. 네이버 블로그도
-// 포함하되(RSS 발행 감지 → syncPerformance) headful 크롬을 쓰므로, syncPerformance 의 하루 1회 게이트
-// (측정뿐 아니라 '시도'도 포함 — naverAttempts)·프로필 락이 같은 날 재기동을 막는다.
-// 동시 트리거는 중복 샘플 append 를 만들므로 in-flight 가드.
+// 성과 즉시 재수집 — 채널 성격이 정반대라 **두 경로로 분리**한다(사용자 결정 2026-08-31).
+//   빠른 갱신(유튜브·릴스·카드뉴스): 순수 API, 브라우저·프로필 락 없음. 실측 96초(쇼츠 100 + 카드뉴스
+//   97 을 유튜브·IG·FB 로 force 조회 — 대부분이 메타 미디어별 콜). 카운터가 연속 변한다.
+//   네이버 수집: 헤드리스 크롬으로 글마다 통계 페이지를 연다 — 18초 × 98건 ≈ 30분, 그동안 프로필을
+//   점유해 임시저장이 막힌다. 게다가 게이트가 이미 'KST 하루 1회'라 대부분의 호출은 헛수고다.
+// 종전엔 둘이 한 버튼에 묶여 있어 싼 쪽이 비싼 쪽의 제약을 그대로 뒤집어썼다(실측 2026-08-31:
+// 유튜브 숫자를 갱신하려다 30분간 임시저장이 "✗ 시작 실패"로 막혔다).
+// 네이버 수동 경로를 없애지는 않는다 — 새벽 자동 수집이 실패한 날의 유일한 복구 수단이다(실측: 같은 날
+// 아침 BLOG_PYTHON 결함으로 자동 수집이 통째로 실패했고, 수동 새로고침이 그날 데이터를 살렸다).
+// 동시 트리거는 중복 샘플 append 를 만들므로 각각 in-flight 가드.
 let perfRefreshBusy = false;
-/** 재수집 본체(백그라운드) — 네이버 일일 추적은 조각 수만큼 순차 브라우저 런이라 수 분 걸릴 수 있다.
- *  실측 2026-07-31: KST 날짜 전환 직후 새로고침 → 19조각 × ~14초 = 약 4분. 동기 응답이던 시절엔
- *  브라우저 fetch 가 타임아웃해 수집은 성공했는데 UI 는 에러로 보였다 → 즉시 응답+폴링으로 전환. */
-async function runPerfRefresh(): Promise<void> {
+let naverRefreshBusy = false;
+
+/** 빠른 갱신(백그라운드) — 순수 API 채널만. 실측 96초. allSettled: 한 채널 실패가 다른 채널을 막지 않음.
+ *  전 채널 force — 측정창 지나 동결된 옛 콘텐츠 숫자도 갱신한다. */
+async function runFastRefresh(): Promise<void> {
   try {
-    // 네이버 블로그: 발행 감지(공개 RSS — 프로필 락 무관) 후 성과 수집. syncPerformance 가 프로필 락·측정창·
-    // 하루 1회(시도 포함) 게이트를 스스로 처리하므로, 수집 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다
-    // (일일 동기화와 동일 동작·안전). 쇼츠·릴스·카드뉴스는 순수 API 라 병행. allSettled — 한 채널 실패가 다른 채널을 막지 않음.
-    // 전 채널 force — 새로고침은 측정창 지나 동결된 옛 콘텐츠 숫자도 갱신한다(네이버 편입 사용자 확정
-    // 2026-07-31 — 헤드리스 전환으로 크롬 비용 해소). 네이버는 시도 게이트(하루 1회)가 그대로 상한.
     await Promise.allSettled([
-      discoverPublishedNaver().then(() => syncPerformance({ force: true })),
       syncShortsPerformance({ force: true }),
       syncShortsMetaPerformance({ force: true }),
       syncCardnewsPerformance({ force: true }),
-      // 이웃·구독자·팔로워 — 종전엔 07:30 일일 브리핑에서만 갱신돼, 새로고침을 눌러도 카드 숫자가
-      // 그대로였다(실측 2026-08-02: 스냅샷이 07-31 에 멈춰 있었다). 순수 API 4콜·약 1초,
-      // 브라우저도 게이트도 없으므로 일일 경로에만 둘 이유가 없다.
+      // 이웃·구독자·팔로워 — 순수 API 4콜·약 1초. 종전엔 07:30 브리핑에서만 갱신돼 새로고침을 눌러도
+      // 카드 숫자가 그대로였다(실측 2026-08-02: 스냅샷이 07-31 에서 정지).
       recordFollowersSnapshot(),
     ]);
   } finally { perfRefreshBusy = false; }
 }
+
+/** 네이버 수집(백그라운드) — 발행 감지(공개 RSS) 후 성과 수집. syncPerformance 가 프로필 락·측정창·
+ *  하루 1회(시도 포함) 게이트를 스스로 처리하므로, 대상이 없거나 프로필 사용 중이면 조용히 건너뛴다.
+ *  수 분~30분 걸린다 — 프론트는 naverBusy 로 폴링한다. */
+async function runNaverRefresh(): Promise<void> {
+  try {
+    await discoverPublishedNaver().then(() => syncPerformance({ force: true }));
+  } catch (e) {
+    console.log('[perf-sync]', `네이버 수집 실패(무해): ${e instanceof Error ? e.message : String(e)}`);
+  } finally { naverRefreshBusy = false; }
+}
+
 function perfRefreshHandler(c: Context): Response {
   // 이미 진행 중이면 에러가 아니라 '진행 중' — 프론트는 같은 폴링 경로로 합류한다(종전 409 는 UI 에 에러로 떴음).
   if (perfRefreshBusy) return c.json({ ok: true, started: false, busy: true });
   perfRefreshBusy = true;
-  void runPerfRefresh();
+  void runFastRefresh();
   return c.json({ ok: true, started: true });
+}
+function naverRefreshHandler(c: Context): Response {
+  if (naverRefreshBusy) return c.json({ ok: true, started: false, busy: true });
+  // 프로필을 이미 다른 브라우저 작업(임시저장 등)이 쓰고 있으면 시작하지 않고 사유를 돌려준다 —
+  // 시작해 봐야 syncPerformance 가 첫 줄에서 건너뛰고 끝난다(사용자에겐 '눌렀는데 아무 일도 안 남').
+  if (naverProfileBusy) return c.json({ ok: false, started: false, busy: true, note: `네이버 브라우저 작업이 진행 중입니다(${naverProfileBusy}) — 완료 후 다시 시도하세요.` });
+  naverRefreshBusy = true;
+  void runNaverRefresh();
+  return c.json({ ok: true, started: true, note: '네이버 수집 시작 — 글마다 브라우저로 통계를 읽어 수 분~30분 걸립니다. 그동안 임시저장은 대기합니다.' });
 }
 app.post('/performance/refresh', perfRefreshHandler);
 app.post('/api/performance/refresh', perfRefreshHandler);
+app.post('/performance/refresh/naver', naverRefreshHandler);
+app.post('/api/performance/refresh/naver', naverRefreshHandler);
 
 // 실제 네이버 수집기 등록 — 일일 성과 동기화(syncPerformance)가 publishedUrl 있는 piece 를 자동 수집.
 // measure 는 fail-open(미로그인·데이터 없음 → null) — 루프를 깨지 않는다. 수동 POST /metrics 는 계속 유효.
@@ -3253,6 +3609,76 @@ async function classifyModel(): Promise<string> {
 async function ingestModel(): Promise<string> {
   return resolveAssignment().micro;
 }
+// ── 사진·영상 보관소 ───────────────────────────────────────────────────────────
+// 문서 자료실(/sources)과 분리한다: 문서는 텍스트를 뽑아 위키에 넣는 지식이고, 사진·영상은
+// 화면에 그대로 나가는 소재다. 한 번 올려 두면 그 수종 콘텐츠가 만들어질 때 자동으로 꺼내 쓴다.
+app.post('/media', async (c) => {
+  const body = await c.req.parseBody({ all: true });
+  const raw = body['files'];
+  const files = (Array.isArray(raw) ? raw : [raw]).filter((x): x is File => x instanceof File);
+  if (!files.length) return c.json({ error: '파일이 필요합니다' }, 400);
+  const species = String(body['species'] ?? '').trim() || undefined;
+  const tags = String(body['tags'] ?? '').split(',').map((t) => t.trim()).filter(Boolean);
+  const note = String(body['note'] ?? '').trim() || undefined;
+  fs.mkdirSync(mediaDir(), { recursive: true });
+  const added: unknown[] = [];
+  const skipped: Array<{ file: string; reason: string }> = [];
+  for (const f of files) {
+    const isImg = f.type.startsWith('image/');
+    const isVid = !isImg && (f.type.startsWith('video/') || VIDEO_EXTS.has(path.extname(f.name || '').toLowerCase()));
+    if (!isImg && !isVid) { skipped.push({ file: f.name, reason: '사진·영상만 보관합니다' }); continue; }
+    const cap = isImg ? 20_000_000 : 500_000_000; // 보관소는 컴포저 첨부보다 넉넉히 — 원본을 두는 곳이다
+    if (f.size > cap) { skipped.push({ file: f.name, reason: `용량 초과(${isImg ? '20MB' : '500MB'})` }); continue; }
+    const ext = (path.extname(f.name || '').toLowerCase() || (isImg ? '.png' : '.mp4')).slice(0, 12);
+    const stem = path.basename(f.name || 'media', path.extname(f.name || ''))
+      .replace(/[^\w가-힣.\-]+/g, '_').slice(0, 40) || 'media';
+    const name = `${Date.now()}-${createHash('sha1').update(`${f.name}:${f.size}`).digest('hex').slice(0, 8)}-${stem}${ext}`;
+    const dest = path.join(mediaDir(), name);
+    await fs.promises.writeFile(dest, Buffer.from(await f.arrayBuffer()));
+    // 영상 길이는 여기서 한 번 재 둔다 — 씬 배정이 매번 ffprobe 를 돌지 않게.
+    let seconds: number | undefined;
+    if (isVid) { try { seconds = await probeDuration(dest); } catch { seconds = undefined; } }
+    added.push(addMedia({
+      file: dest, kind: isImg ? 'image' : 'video', name: f.name || name, bytes: f.size,
+      ...(seconds ? { seconds } : {}), ...(species ? { species } : {}), ...(tags.length ? { tags } : {}),
+      ...(note ? { note } : {}), ...(activeBrandSlug() ? { brand: activeBrandSlug() } : {}),
+    }));
+  }
+  if (!added.length) return c.json({ error: '보관할 파일이 없습니다', skipped }, 400);
+  learnMediaLabel(species); // 딱지가 사전에 없는 이름이면 배워 둔다 — 다음 런부터 이 소재가 걸린다
+  return c.json({ ok: true, added, skipped });
+});
+app.get('/media', (c) => c.json({ media: listMedia(activeBrandSlug() || undefined) }));
+app.patch('/media/:id', async (c) => {
+  type MediaPatch = { species?: string; tags?: string[]; note?: string };
+  const b = await c.req.json<MediaPatch>().catch(() => ({} as MediaPatch));
+  const up = updateMedia(c.req.param('id') ?? '', {
+    ...(b.species !== undefined ? { species: b.species || undefined } : {}),
+    ...(b.tags !== undefined ? { tags: b.tags } : {}),
+    ...(b.note !== undefined ? { note: b.note || undefined } : {}),
+  });
+  if (up && b.species) learnMediaLabel(b.species); // 나중에 딱지를 고쳐 붙일 때도 같은 학습
+  return up ? c.json({ ok: true, item: up }) : c.json({ error: 'unknown media' }, 404);
+});
+app.delete('/media/:id', (c) => (removeMedia(c.req.param('id') ?? '')
+  ? c.json({ ok: true })
+  : c.json({ error: 'unknown media' }, 404)));
+// 파일 서빙 — 목록 썸네일·미리보기용. 보관소 밖 경로는 절대 안 내보낸다(경로 주입 방지).
+app.get('/media/file/:id', (c) => {
+  const hit = listMedia().find((m) => m.id === c.req.param('id'));
+  if (!hit) return c.json({ error: 'unknown media' }, 404);
+  const root = path.resolve(mediaDir());
+  const real = path.resolve(hit.file);
+  if (!real.startsWith(root + path.sep)) return c.json({ error: 'forbidden' }, 403);
+  try {
+    const buf = fs.readFileSync(real);
+    const ext = path.extname(real).toLowerCase();
+    const type = ext === '.mp4' || ext === '.m4v' ? 'video/mp4' : ext === '.mov' ? 'video/quicktime'
+      : ext === '.webm' ? 'video/webm' : ext === '.png' ? 'image/png' : 'image/jpeg';
+    return new Response(new Uint8Array(buf), { headers: { 'content-type': type, 'cache-control': 'private, max-age=86400' } });
+  } catch { return c.json({ error: 'read failed' }, 500); }
+});
+
 app.post('/sources', async (c) => {
   const body = await c.req.parseBody({ all: true });
   const raw = body['files'];
@@ -3839,6 +4265,11 @@ void stopDaily;
 async function syncPerformance(opts?: { force?: boolean }): Promise<void> {
   // 사용자 트리거 브라우저 작업(임시저장·수집)이 프로필을 쓰는 중이면 이번 주기는 건너뛴다(프로필 락 충돌 방지).
   if (naverProfileBusy) { console.log('[perf-sync]', `프로필 사용 중(${naverProfileBusy}) — 이번 주기 건너뜀`); return; }
+  // 사전 점검(실사고 2026-08-31) — 인터프리터·스크립트가 없으면 어떤 piece 도 성공할 수 없다.
+  // 그냥 돌리면 전 조각이 '빈손 시도'로 끝나며 markNaverAttempt 가 하루 1회 게이트를 소진해,
+  // 설정을 고쳐도 그날은 복구되지 않는다(실측: 새로고침 한 번에 94개 소진). 루프 전에 멈춘다.
+  const skillProblem = blogSkillProblem('naver_stats.py');
+  if (skillProblem) { console.log('[perf-sync]', `네이버 수집 건너뜀 — ${skillProblem}`); return; }
   naverProfileBusy = '일일동기화';
   try {
   const collector = getCollector();
@@ -3909,12 +4340,29 @@ const stopPerfSync = startDaily({
   // 설정 비어 있음 + 스냅샷 07-31 에서 정지). 브리핑 설정 여부와 팔로워 추적은 서로 묶일 이유가 없다.
   // 조회수 감사(2026-08-20) 일일 배선 — 리서치 판정 수확 + 자동완성 트렌드 스냅샷(둘 다 fail-open, 주제 두뇌가 소비).
   // 검색 수요 스냅샷(2026-08-26)도 여기 합류 — 시드 키워드의 절대 검색량·시즌 지수(하루 ~6콜, 킬스위치 off 면 0콜).
-  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 쇼츠·카드뉴스·릴스는 순수 API — 프로필 락 무관
+  run: () => { void syncShortsPerformance(); void syncCardnewsPerformance(); void syncShortsMetaPerformance(); void recordFollowersSnapshot().catch(() => {}); void harvestTopicVerdicts().catch(() => {}); void refreshTrendSnapshot().catch(() => {}); void refreshDemandSnapshot().catch(() => {}); void refreshYtNicheSnapshot().catch(() => {}); void ensureSeriesLabels(activeBrandSlug() || undefined).catch(() => {}); }, // 전부 순수 API — 프로필 락 무관. 네이버는 아래 새벽 잡으로 분리(2026-08-31).
   log: (m) => console.log('[perf-sync]', m),
 });
 if (CONFIG.performanceSyncTime) {
   // eslint-disable-next-line no-console
   console.log(`[biz-contents-creator] 성과 동기화 활성 — ${CONFIG.performanceSyncTime} · 수집기 "${getCollector().name}"(측정창 ${CONFIG.performanceWindowDays}일)`);
+}
+
+// 네이버 성과 수집(새벽 1회) — 위 07:30 잡에서 분리(사용자 결정 2026-08-31). 분리 이유는 비용 구조다:
+// 순수 API 채널은 수 초에 끝나는데 네이버만 헤드리스 크롬으로 글마다 통계를 열어 18초×98건 ≈ 30분이
+// 걸리고, 그동안 프로필을 점유해 임시저장이 막힌다. 사람이 안 쓰는 시간대로 옮긴다.
+// KST 자정 이후라 '하루 1회' 게이트가 깨끗이 리셋된 뒤이고, 06:00 정각 오토런과도 3시간 여유가 있다.
+const stopNaverSync = startDaily({
+  time: CONFIG.naverSyncTime,
+  key: 'naver-sync',
+  // 발행 감지(공개 RSS)가 publishedUrl 을 채운 뒤 성과 수집 — 순서 의존이라 then 으로 잇는다.
+  run: () => { void discoverPublishedNaver().then(() => syncPerformance()); },
+  log: (m) => console.log('[naver-sync]', m),
+});
+void stopNaverSync;
+if (CONFIG.naverSyncTime) {
+  // eslint-disable-next-line no-console
+  console.log(`[biz-contents-creator] 네이버 성과 수집 — 매일 ${CONFIG.naverSyncTime}(하루 1회 · 수동은 성과탭 "네이버 수집")`);
 }
 // 수요 게이트 상태 1줄(2026-08-26 리뷰 M2) — 켜져 있어도 검색광고 키가 없으면 전량 fail-open 이라
 // 아무 판정도 일어나지 않는다. 그 '조용한 무동작'이 부팅 로그에서 바로 보이게 한다.
@@ -3961,9 +4409,15 @@ if (!process.env.VITEST) {
             } catch { /* 본문 없이도 재개 — planShorts 는 sourceBody 없이 동작 */ }
           }
           shortsStore().update(sid, { recoveries: (s.recoveries ?? 0) + 1 });
+          // 재개도 보관소를 다시 본다 — 안 그러면 중단 전에 쓰기로 했던 실촬영이 재개 후 사라진다.
+          const piece = s.sourcePieceId ? pieceStore().get(s.sourcePieceId) : undefined;
+          const media = mediaForTopic({
+            brand: s.brand, text: `${s.keyword ?? ''} ${s.topic}`,
+            attached: piece?.assets, attachedVideos: piece?.videoAssets,
+          });
           launchShortsRun(sid, s.topic, sourceBody
-            ? { sourceBody, sourceFlagged: sourceFlaggedClaims(pieceStore().get(s.sourcePieceId ?? '')?.runId) }
-            : {});
+            ? { sourceBody, sourceFlagged: sourceFlaggedClaims(pieceStore().get(s.sourcePieceId ?? '')?.runId), ...media }
+            : media);
           // eslint-disable-next-line no-console
           console.log(`[부팅 복구] 중단된 숏폼 자동 재개 — ${s.topic.slice(0, 30)} (${(s.recoveries ?? 0) + 1}/2회차)`);
         } catch (e) { console.log(`[부팅 복구] 숏폼 ${sid} 재개 실패(무해): ${e instanceof Error ? e.message : String(e)}`); }
@@ -4035,6 +4489,16 @@ const port = CONFIG.port;
 if (!process.env.VITEST) serve({ fetch: app.fetch, hostname: CONFIG.host, port }, (info) => {
   // eslint-disable-next-line no-console
   console.log(`[biz-contents-creator] http://${CONFIG.host}:${info.port}  (backend=claude)  · React=/ · lite=/lite`);
+  // CLI 부재를 부팅 로그에서 즉시 드러낸다 — 실사고 2026-08-31: 런처 축소 PATH 로 claude 를 못 찾아
+  // 모든 LLM 호출이 ENOENT 였는데, 호출부들이 실패를 삼켜 서버는 2시간 동안 정상처럼 보였다.
+  const cliProblem = claudeCliProblem();
+  // eslint-disable-next-line no-console
+  if (cliProblem) console.error(`[biz-contents-creator] ⚠️ ${cliProblem}`);
+  // 네이버 수집·발행의 외부 파이썬도 같은 이유로 부팅 때 드러낸다(실사고 2026-08-31: .env 가 삭제된
+  // 사본을 가리켜 블로그 성과가 하루 종일 0건이었는데 로그는 '표본 없음'으로만 보였다).
+  const blogProblem = blogSkillProblem('naver_stats.py');
+  // eslint-disable-next-line no-console
+  if (blogProblem) console.error(`[biz-contents-creator] ⚠️ 네이버 블로그 스킬 — ${blogProblem}`);
 });
 
 // 메타(페이스북) OAuth 콜백 전용 HTTPS 리스너 — 페이스북은 OAuth 리디렉션에 HTTPS 를 강제한다

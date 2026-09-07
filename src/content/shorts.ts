@@ -9,6 +9,7 @@ import { CONFIG } from '../config';
 import { activeBrandSlug } from './brand';
 import { genId } from '../util/ids';
 import type { FactGateInfo } from './factGate';
+import type { ShortsPlatform } from './shortsPlatform';
 
 export type ShortsStage = 'planning' | 'designing' | 'rendering' | 'ready' | 'error';
 
@@ -18,6 +19,11 @@ export interface Shorts {
   notifiedTs?: string;
   /** 브랜드(고객사) 슬러그 — 생성 시점의 활성 브랜드(범용이면 undefined). */
   brand?: string;
+  /**
+   * 발행 대상 채널(2026-09-03) — 유튜브와 인스타를 대본부터 따로 만든다. 미지정은 레거시 레코드
+   * (그 이전 108편)로 양 채널 겸용이며 발행 게이트도 열어 둔다.
+   */
+  platform?: ShortsPlatform;
   /** 주제(독립 생성) 또는 원본 블로그 제목(파생). */
   topic: string;
   keyword?: string;
@@ -43,6 +49,11 @@ export interface Shorts {
   bgFallbacks?: number;
   /** 담당자 실명(작가·디렉터) — UI 표기. */
   writer?: string;
+  /**
+   * 작가 페르소나 id(2026-09-03) — 편마다 다른 작가가 쓰고 그 작가의 목소리로 낭독한다.
+   * 미지정은 레거시(148편 전부 유하린·같은 목소리). shortsWriters.SHORTS_WRITERS 참조.
+   */
+  writerId?: string;
   director?: string;
   /** 원문 정합 판정(2026-08-26) — 수정 라운드 뒤 잔존한 원문 밖 사실·결론 반전. 표시 전용(파생은 자동 발행 없음). */
   factGate?: FactGateInfo;
@@ -68,12 +79,31 @@ export interface Shorts {
   metaPublishedTs?: string;
   /** 메타 측정 창 경과 후 강화 1회 완료(멱등) — perfReflected(유튜브)와 독립. */
   metaPerfReflected?: boolean;
+  /** 원본 영상(final.mp4)을 저용량 preview.mp4 로 교체한 시각(2026-08-31 저장공간 정책). 있으면 재실행 안 함. */
+  videoArchivedTs?: string;
   createdTs: string;
   updatedTs: string;
 }
 
+/**
+ * QA 미해결 발행 차단 사유(순수) — 카드뉴스 qaPublishBlockReason 의 쇼츠판.
+ *
+ * 실사고(2026-09-03, short_5b5f7f4231): 썸네일이 "줄자로"를 "좔자로"로 냈고 비전 QA 는 정확히
+ * 불합격을 냈는데, 재시도 소진 뒤 "디자인본 우선" 방침이 그 이미지를 로그도 없이 그대로 썼다.
+ * 카드뉴스는 같은 사고(2026-08-10) 뒤에 게이트를 달았고 쇼츠에는 없었다.
+ *
+ * 방침은 그대로 둔다(오타 있는 디자인본이 영상 프레임 폴백보다 낫다) — 대신 사람이 한 번 보게 한다.
+ * 발행 라우트가 모든 경로(UI 버튼·텔레그램)의 관문이라 여기 한 곳만 지키면 된다.
+ */
+export function shortsQaPublishBlockReason(thumbQaFailed: boolean, force = false): string | null {
+  if (!thumbQaFailed || force) return null;
+  return '썸네일 한글 QA가 오타 가능성을 미해결로 남겼습니다 — 썸네일을 확인한 뒤 발행을 확정하거나, 썸네일을 재생성하세요';
+}
+
 export interface CreateShortsInput {
   topic: string;
+  platform?: ShortsPlatform;
+  writerId?: string;
   keyword?: string;
   sourcePieceId?: string;
   writer?: string;
@@ -110,8 +140,8 @@ export class ShortsStore {
       id: genId('short'),
       brand: activeBrandSlug() || undefined, topic: input.topic.trim(),
       keyword: input.keyword?.trim() || undefined,
-      sourcePieceId: input.sourcePieceId, auto: input.auto,
-      writer: input.writer, director: input.director,
+      sourcePieceId: input.sourcePieceId, auto: input.auto, platform: input.platform,
+      writer: input.writer, writerId: input.writerId, director: input.director,
       stage: 'planning', createdTs: now, updatedTs: now,
     };
     this.items.set(s.id, s);

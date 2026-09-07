@@ -86,7 +86,10 @@ const PREVIEW_CSS = `
  * 남는 슬롯은 본문 끝에 이어붙인다. imagesReady=true 면 세션 상대경로 <img>(images/blog-image-0N.png),
  * 아니면 자리표시 박스 — 미리보기는 서버가 <base href="/pieces/:id/"> 를 주입해 이미지를 서빙한다.
  */
-export function renderHtml(d: BlogDraft, opts?: { imagesReady?: boolean }): string {
+export function renderHtml(d: BlogDraft, opts?: { imagesReady?: boolean; readySlots?: ReadonlySet<number> }): string {
+  // readySlots 가 오면 슬롯 단위 실재 판정(생성 후 파일 스캔), 없으면 종전 런 단위 예측.
+  // 실사고 2026-08-31: 예측만 있던 시절, 생성이 통째로 실패해도 <img> 를 뱉어 미리보기가 깨졌다.
+  const ready = (i: number): boolean => (opts?.readySlots ? opts.readySlots.has(i) : (opts?.imagesReady ?? false));
   const imagesReady = opts?.imagesReady ?? false;
   const slots = d.imageSlots;
   const body = d.bodyMarkdown;
@@ -111,7 +114,7 @@ export function renderHtml(d: BlogDraft, opts?: { imagesReady?: boolean }): stri
       flushAll();
       const desc = (m[1] ?? '').trim();
       const slot = slots[slotIdx];
-      out.push(figureHtml(slotIdx, slot?.alt || desc || '삽입 이미지', imagesReady && !!slot));
+      out.push(figureHtml(slotIdx, slot?.alt || desc || '삽입 이미지', ready(slotIdx) && !!slot));
       slotIdx++;
     } else if ((m = line.match(/^###\s+(.*)$/))) { flushAll(); out.push(`<h3>${inline(m[1]!)}</h3>`); }
     else if ((m = line.match(/^##\s+(.*)$/)) || (m = line.match(/^#\s+(.*)$/))) {
@@ -119,7 +122,7 @@ export function renderHtml(d: BlogDraft, opts?: { imagesReady?: boolean }): stri
       out.push(`<h2>${inline(m[1]!)}</h2>`);
       // 마커 없는 본문 — 첫 H2들 바로 아래에 슬롯 배분(네이버 관행: 소제목 밑 사진).
       if (!hasMarkers && slotIdx < slots.length && h2Count <= slots.length) {
-        out.push(figureHtml(slotIdx, slots[slotIdx]!.alt, imagesReady));
+        out.push(figureHtml(slotIdx, slots[slotIdx]!.alt, ready(slotIdx)));
         slotIdx++;
       }
     } else if (/^\s*(?:-{3,}|\*{3,})\s*$/.test(line)) { flushAll(); out.push('<hr>'); }
@@ -130,7 +133,7 @@ export function renderHtml(d: BlogDraft, opts?: { imagesReady?: boolean }): stri
   }
   flushAll();
   // 마커보다 슬롯이 많으면(디자이너가 3장 확정, 마커 2개 등) 남은 이미지를 본문 끝에.
-  while (slotIdx < slots.length) { out.push(figureHtml(slotIdx, slots[slotIdx]!.alt, imagesReady)); slotIdx++; }
+  while (slotIdx < slots.length) { out.push(figureHtml(slotIdx, slots[slotIdx]!.alt, ready(slotIdx))); slotIdx++; }
 
   const title = d.titleCandidates[0] ?? d.topic;
   const article = [

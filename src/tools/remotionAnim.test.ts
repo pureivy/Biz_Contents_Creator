@@ -137,3 +137,104 @@ describe('spotlightRadius·particleState — 액센트 수학(순수·결정적)
     expect(A.particleState(5, 9999).y01).toBeLessThan(1.15); // 순환 유지
   });
 });
+
+describe('popIn (스프링 등장)', () => {
+  it('시작은 0, 지연 프레임 전에는 계속 0', () => {
+    expect(A.popIn(0, 30)).toBe(0);
+    expect(A.popIn(3, 30, 10)).toBe(0);
+    expect(A.popIn(10, 30, 10)).toBe(0);
+  });
+  it('오버슛한다 — 어딘가에서 1 을 넘는다(ease-out 과의 차이)', () => {
+    const peak = Math.max(...Array.from({ length: 30 }, (_, i) => A.popIn(i, 30)));
+    expect(peak).toBeGreaterThan(1);
+    expect(peak).toBeLessThan(1.2); // 과하면 카드가 화면 밖으로 튄다
+  });
+  it('정착한 뒤로는 정확히 1 — 씬 내내 흔들림이 남지 않는다', () => {
+    expect(A.popIn(22, 30)).toBeCloseTo(1, 2); // 끝자락(아직 미세 오버슛)
+    for (const f of [23, 60, 200]) expect(A.popIn(f, 30)).toBe(1);
+  });
+  it('delay 는 시간축 평행이동일 뿐 곡선을 바꾸지 않는다', () => {
+    for (const f of [1, 5, 12, 21]) expect(A.popIn(f + 40, 30, 40)).toBeCloseTo(A.popIn(f, 30), 10);
+  });
+});
+
+describe('captionWordPop / staggerPop', () => {
+  it('단어 i 는 i*perWord 프레임에 시작한다', () => {
+    expect(A.captionWordPop(12, 30, 2, 6)).toBe(0);
+    expect(A.captionWordPop(18, 30, 2, 6)).toBeGreaterThan(0);
+  });
+  it('빈 목록은 1(나눗셈 0 방어)', () => {
+    expect(A.staggerPop(0, 100, 0, 0, 30)).toBe(1);
+  });
+  it('뒤 항목일수록 늦게 뜬다', () => {
+    const a = A.staggerPop(40, 180, 0, 3, 30);
+    const b = A.staggerPop(40, 180, 2, 3, 30);
+    expect(a).toBeGreaterThan(b);
+  });
+});
+
+describe('kenBurnsMove — 화면 절반 치수 주입', () => {
+  it('기본값은 종전 1080x1920 하드코딩과 동일', () => {
+    const withDefault = A.kenBurnsMove(50, 100, 0, 'zoom-in', 'strong');
+    const explicit = A.kenBurnsMove(50, 100, 0, 'zoom-in', 'strong', { w: 540, h: 960 });
+    expect(explicit).toEqual(withDefault);
+  });
+  it('화면이 좁아지면 팬 캡도 좁아진다 — 검은 띠 방지 불변식이 치수를 따라간다', () => {
+    const wide = A.kenBurnsMove(90, 100, 0, 'zoom-in', 'strong', { w: 540, h: 960 });
+    const narrow = A.kenBurnsMove(90, 100, 0, 'zoom-in', 'strong', { w: 120, h: 960 });
+    expect(Math.abs(narrow.x)).toBeLessThan(Math.abs(wide.x));
+    // 어떤 치수에서도 노출 불가 불변식: |x| ≤ (s-1)*half/s
+    for (const [m, half] of [[wide, 540], [narrow, 120]] as const) {
+      expect(Math.abs(m.x)).toBeLessThanOrEqual(((m.scale - 1) * half) / m.scale + 1e-9);
+    }
+  });
+});
+
+describe('cameraDrift — 손 흔들림', () => {
+  it('시드가 없으면 0 — 구 호출부는 종전 궤도 그대로', () => {
+    expect(A.cameraDrift(30)).toEqual({ x: 0, y: 0, rotate: 0 });
+  });
+  it('결정적 — 같은 프레임·시드는 같은 값(재렌더 안정)', () => {
+    expect(A.cameraDrift(42, 'short_x:1')).toEqual(A.cameraDrift(42, 'short_x:1'));
+  });
+  it('씬마다·편마다 다르게 흔들린다', () => {
+    expect(A.cameraDrift(42, 'short_x:1')).not.toEqual(A.cameraDrift(42, 'short_x:2'));
+    expect(A.cameraDrift(42, 'short_x:1')).not.toEqual(A.cameraDrift(42, 'short_y:1'));
+  });
+  it('실제로 움직이되 진폭이 작다 — 배경이 자막보다 시끄러우면 안 된다', () => {
+    const xs = Array.from({ length: 240 }, (_, f) => A.cameraDrift(f, 'seed:0').x);
+    expect(Math.max(...xs.map(Math.abs))).toBeGreaterThan(1);   // 정지 아님
+    expect(Math.max(...xs.map(Math.abs))).toBeLessThanOrEqual(12);
+    const rs = Array.from({ length: 240 }, (_, f) => A.cameraDrift(f, 'seed:0').rotate);
+    expect(Math.max(...rs.map(Math.abs))).toBeLessThanOrEqual(0.3);
+  });
+  it('연속적이다 — 프레임 간 점프가 없어야 떨림이 아니라 흔들림으로 보인다', () => {
+    let maxStep = 0;
+    for (let f = 1; f < 300; f++) {
+      maxStep = Math.max(maxStep, Math.abs(A.cameraDrift(f, 's:0').x - A.cameraDrift(f - 1, 's:0').x));
+    }
+    expect(maxStep).toBeLessThan(1); // 프레임당 1px 미만
+  });
+});
+
+describe('kenBurnsMove — 드리프트를 얹어도 검은 띠가 안 난다', () => {
+  it('어떤 조합에서도 팬 오프셋이 축별 허용치를 안 넘는다', () => {
+    const moves = ['zoom-in', 'zoom-out', 'push'] as const;
+    const ints = ['subtle', 'normal', 'strong'] as const;
+    for (const mv of moves) for (const it of ints) for (const seed of ['a:0', 'b:1', 'c:2']) {
+      for (let f = 0; f <= 200; f += 7) {
+        const m = A.kenBurnsMove(f, 200, 1, mv, it, { w: 540, h: 960 }, seed);
+        expect(Math.abs(m.x)).toBeLessThanOrEqual(((m.scale - 1) * 540) / m.scale + 1e-9);
+        expect(Math.abs(m.y)).toBeLessThanOrEqual(((m.scale - 1) * 960) / m.scale + 1e-9);
+      }
+    }
+  });
+  it('드리프트를 주면 궤도가 실제로 달라진다', () => {
+    const plain = A.kenBurnsMove(60, 200, 1, 'zoom-in', 'normal');
+    const drifted = A.kenBurnsMove(60, 200, 1, 'zoom-in', 'normal', { w: 540, h: 960 }, 'seed:1');
+    expect(drifted).not.toEqual(plain);
+  });
+  it("move:'none' 은 드리프트도 안 받는다 — 완전 정지가 의도인 자리", () => {
+    expect(A.kenBurnsMove(60, 200, 1, 'none', 'normal', { w: 540, h: 960 }, 'seed:1')).toEqual({ scale: 1, x: 0, y: 0, rotate: 0 });
+  });
+});

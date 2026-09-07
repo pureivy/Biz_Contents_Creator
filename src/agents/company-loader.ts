@@ -69,9 +69,47 @@ function ensureLoaded(): void {
       if (p) for (const [k, v] of Object.entries(p)) if (v) _people[k] = String(v);
     }
     ensureSecretariat();
+    ensureSeedMembers();
   } catch {
     _doc = {};
   }
+}
+/**
+ * 시드에서 뒤늦게 추가된 팀원 보강(2026-09-03 숏폼 작가 3인 분리) — 시드 복사는 data/company.yaml 부재 시에만
+ * 일어나므로, 기존 데이터 보유 환경에는 새 작가 역할이 없어 숏폼 기획이 전부 리드 작가 프롬프트로 떨어진다
+ * (shorts.ts 는 역할이 없으면 'shorts_writer' 로 폴백). 시드의 모든 역할을 무작정 되살리면 사용자가 지운
+ * 역할까지 부활하므로, 코드가 id 로 직접 부르는 역할만 목록으로 못박아 보강한다. 팀 자체가 없으면 건드리지 않는다.
+ */
+const SEED_BACKFILL_MEMBERS: ReadonlyArray<{ team: string; id: string }> = [
+  { team: 'shorts', id: 'shorts_writer_b' },
+  { team: 'shorts', id: 'shorts_writer_c' },
+];
+function ensureSeedMembers(): void {
+  if (!_doc?.ceo) return;
+  const seedFile = path.join(SEED_DIR, 'company.yaml');
+  if (!fs.existsSync(seedFile)) return;
+  let seed: RawDoc | null = null;
+  let seedPeople: Record<string, unknown> = {};
+  try {
+    seed = (YAML.parse(fs.readFileSync(seedFile, 'utf-8')) as RawDoc) || null;
+    const pf = path.join(SEED_DIR, 'people.yaml');
+    if (fs.existsSync(pf)) seedPeople = (YAML.parse(fs.readFileSync(pf, 'utf-8')) as Record<string, unknown>) || {};
+  } catch { return; }
+  if (!seed) return;
+  const teams = (_doc.teams ??= []);
+  const have = new Set([_doc.ceo, ...teams.flatMap((t) => [t.lead, ...(t.members ?? [])])].map((r) => r?.id).filter(Boolean));
+  let changed = false;
+  for (const want of SEED_BACKFILL_MEMBERS) {
+    if (have.has(want.id)) continue;
+    const team = teams.find((t) => t.id === want.team);
+    const src = (seed.teams ?? []).find((t) => t.id === want.team)?.members?.find((m) => m.id === want.id);
+    if (!team || !src) continue;
+    (team.members ??= []).push(JSON.parse(JSON.stringify(src)) as typeof src);
+    const nm = seedPeople[want.id];
+    if (nm && !_people[want.id]) _people[want.id] = String(nm);
+    changed = true;
+  }
+  if (changed) save();
 }
 /** 비서실(자비스) 시스템 역할 보강 — 시드 복사는 data/company.yaml 부재 시에만 일어나므로 기존
  *  데이터 보유 환경(업그레이드)에는 secretary 가 없어 직원 탭 표시·역할 편집이 불가했다. ceo 가 있는

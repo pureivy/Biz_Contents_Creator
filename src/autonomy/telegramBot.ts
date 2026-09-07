@@ -71,7 +71,7 @@ async function runAction(a: Exclude<BotAction, { kind: 'revise' }>): Promise<str
   switch (a.kind) {
     case 'naver_draft': {
       const r = await api(`/pieces/${a.id}/naver-draft`, { actor: '텔레그램' }, 30_000);
-      return r.ok ? '📗 네이버 임시저장 시작 — 완료되면 알림이 옵니다.' : errText('임시저장 시작 실패', r);
+      return r.ok ? '📗 네이버 비공개 발행 시작 — 완료되면 알림이 옵니다.' : errText('비공개 발행 시작 실패', r);
     }
     case 'cardnews_publish': {
       const r = await api(`/cardnews/${a.id}/publish`);

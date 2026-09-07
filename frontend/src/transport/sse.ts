@@ -65,7 +65,7 @@ export async function startRun(
   onRunId: (runId: string) => void,
   getLastSeq: () => number,
   opts?: { agent?: string; path?: string;
-           budget?: number; images?: string[]; docs?: string[]; mission?: string;
+           budget?: number; images?: string[]; videos?: string[]; docs?: string[]; mission?: string;
            persona?: string; personaText?: string },
 ): Promise<RunHandle> {
   const res = await fetch("/runs", {
@@ -75,11 +75,13 @@ export async function startRun(
     // `path` picks the 3-tier run path ("team"|"full"); omitted = server auto-recommend.
     // `budget` caps THIS run's spend in USD (0 = explicit unlimited); omitted = global default.
     // `images` — /runs/attachments 로 업로드된 첨부 이미지 경로(멀티모달 주제 입력).
+    // `videos` — 첨부 실촬영 영상 경로. 본 런(텍스트)에는 안 쓰이고, 파생 쇼츠가 씬 클립으로 쓴다.
     // `mission` — 'research' = 지식 리서치 런(조사→토론→두뇌 적재, 발행 초안 없음).
     body: JSON.stringify({
       topic,
       ...(opts?.agent ? { agent: opts.agent } : {}),
       ...(opts?.images?.length ? { images: opts.images } : {}),
+      ...(opts?.videos?.length ? { videos: opts.videos } : {}),
       ...(opts?.docs?.length ? { docs: opts.docs } : {}),
       ...(opts?.mission ? { mission: opts.mission } : {}),
       ...(opts?.persona ? { persona: opts.persona } : {}),
