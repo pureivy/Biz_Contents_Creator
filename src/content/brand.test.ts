@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest';
-import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide } from './brand';
+import { normalizeBrand, brandContext, brandProductLines, brandSeedKeywords, brandSlug, isSafeBrandSlug, brandFileSuffixFor, bannedTopicTerms, offBrandTerm, lexiconGuide, subjectNoun, subjectTraits, industryLabel, subjectStopwords, subjectGenericTerms, keywordExamples, subjectIntentRegex, subjectAnchorTest, SUBJECT_STOPWORDS_BASE, activityAxes } from './brand';
 
 // 브랜드 프로필 — 정규화·주입 블록(순수 함수) 회귀 방지.
 describe('normalizeBrand', () => {
@@ -96,6 +96,9 @@ describe('브랜드 소재 범위 게이트(2026-07-31 정체성 각인) — ban
       '화초·구근·꽃 모종 주제(튤립·수선화·페튜니아·제라늄 등)',
       '다육·선인장·실내 관엽 등 나무가 아닌 화분 식물 주제',
     ],
+    // 브랜드의 정상 소재어 — 종전엔 코드에 박혀 있었고(범용화 2026-09-07) 이제 브랜드 설정이 준다.
+    subjectGenericTerms: ['나무', '묘목', '식물', '화분'],
+    subjectStopwords: ['꽃', '모종', '실내', '베란다', '작물'],
   })!;
 
   it('토큰 도출 — 금지 소재어는 뽑고, 브랜드 정상 소재어(나무·묘목·식물·화분·꽃)는 스톱워드로 제외', () => {
@@ -150,5 +153,74 @@ describe('avoidJargon 파싱 + lintLexicon', () => {
   it('lintLexicon — 목록 없으면 빈 배열', async () => {
     const { lintLexicon } = await import('./brand');
     expect(lintLexicon('아무 본문', undefined)).toEqual([]);
+  });
+});
+
+// 업종 어휘 프로필(2026-09-07 범용화) — 원예 낱말을 코드에서 빼고 브랜드 설정으로 옮긴 접근자들.
+describe('업종 어휘 프로필 — 정규화', () => {
+  it('일곱 필드를 받고 캡·트림한다', () => {
+    const b = normalizeBrand({
+      name: 'X', subjectNoun: ' 식물 ', subjectTraits: '잎 모양·잎차례·수형',
+      subjectStopwords: ['나무', ' 묘목 ', ''], subjectGenericTerms: ['나무', '유실수'],
+      keywordExamples: ['매실나무 가지치기'], subjectIntentTerms: ['심기', '전정'],
+      subjectAnchorPattern: '[가-힣]{1,6}나무',
+    })!;
+    expect(b.subjectNoun).toBe('식물');
+    expect(b.subjectStopwords).toEqual(['나무', '묘목']);
+    expect(b.subjectGenericTerms).toEqual(['나무', '유실수']);
+    expect(b.keywordExamples).toEqual(['매실나무 가지치기']);
+    expect(b.subjectIntentTerms).toEqual(['심기', '전정']);
+    expect(b.subjectAnchorPattern).toBe('[가-힣]{1,6}나무');
+  });
+  it('행위 축은 문자열 배열의 배열만 받고 빈 묶음은 버린다', () => {
+    const b = normalizeBrand({ name: 'X', activityAxes: [['전정', ' 가지치기 '], [], ['물주기']] as unknown as string[][] })!;
+    expect(b.activityAxes).toEqual([['전정', '가지치기'], ['물주기']]);
+    expect(activityAxes(b)).toEqual([{ terms: ['전정', '가지치기'] }, { terms: ['물주기'] }]);
+    expect(activityAxes(normalizeBrand({ name: 'X' }))).toEqual([]);
+  });
+  it('컴파일 안 되는 정규식은 버린다 — 런타임에 throw 하면 자율 사이클이 죽는다', () => {
+    expect(normalizeBrand({ name: 'X', subjectAnchorPattern: '[가-힣' })!.subjectAnchorPattern).toBeUndefined();
+  });
+});
+
+describe('업종 어휘 프로필 — 접근자 기본값(업종 중립)', () => {
+  const none = normalizeBrand({ name: '무설정' });
+  it('총칭·특징·업종 표기 기본', () => {
+    expect(subjectNoun(none)).toBe('소재');
+    expect(subjectNoun(null)).toBe('소재');
+    expect(subjectTraits(none)).toBe('형태·색·크기·재질');
+    expect(industryLabel(none)).toBe('이 브랜드');
+    expect(industryLabel(normalizeBrand({ name: 'X', industry: '원예' }))).toBe('원예');
+  });
+  it('불용어 = 기본 + 설정 + 총칭어, 중복 제거', () => {
+    expect(subjectStopwords(none)).toEqual([...SUBJECT_STOPWORDS_BASE]);
+    const b = normalizeBrand({ name: 'X', subjectStopwords: ['전정', '봄'], subjectGenericTerms: ['나무'] });
+    const out = subjectStopwords(b);
+    expect(out).toContain('전정'); expect(out).toContain('나무');
+    expect(out.filter((t) => t === '봄')).toHaveLength(1);
+    expect(subjectGenericTerms(none)).toEqual([]);
+  });
+  it('검색어 예시 — 설정 > 시드 키워드 앞 3개 > 빈 목록', () => {
+    expect(keywordExamples(none)).toEqual([]);
+    expect(keywordExamples(normalizeBrand({ name: 'X', seedKeywords: ['a', 'b', 'c', 'd'] }))).toEqual(['a', 'b', 'c']);
+    expect(keywordExamples(normalizeBrand({ name: 'X', seedKeywords: ['a'], keywordExamples: ['k'] }))).toEqual(['k']);
+  });
+  it('검색 의도어 정규식 — 범용 기본은 어느 업종 검색어든 잡고, 설정하면 그것만', () => {
+    expect(subjectIntentRegex(none).test('원두 고르는 방법')).toBe(true);
+    expect(subjectIntentRegex(none).test('배롱나무')).toBe(false);
+    const b = normalizeBrand({ name: 'X', subjectIntentTerms: ['심기', '가지치기'] });
+    expect(subjectIntentRegex(b).test('매실나무 가지치기')).toBe(true);
+    expect(subjectIntentRegex(b).test('매실나무 추천')).toBe(false);
+    // 특수문자가 든 의도어도 그대로 문자로 취급한다
+    expect(subjectIntentRegex(normalizeBrand({ name: 'X', subjectIntentTerms: ['C++'] })).test('C++ 입문')).toBe(true);
+  });
+  it('소재 앵커 판정 — 정규식 > 카탈로그 이름 > null', () => {
+    expect(subjectAnchorTest(none)).toBeNull();
+    const re = subjectAnchorTest(normalizeBrand({ name: 'X', subjectAnchorPattern: '[가-힣]{1,6}나무' }))!;
+    expect(re('회화나무 꽃말')).toBe(true);
+    expect(re('튤립 꽃말')).toBe(false);
+    const cat = subjectAnchorTest(normalizeBrand({ name: 'X', speciesCatalog: [{ group: 'g', species: [{ name: '에스프레소', aliases: ['에쏘'] }] }] }))!;
+    expect(cat('에쏘 유래')).toBe(true);
+    expect(cat('라떼 유래')).toBe(false);
   });
 });

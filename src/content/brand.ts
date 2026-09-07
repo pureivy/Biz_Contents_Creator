@@ -74,6 +74,24 @@ export interface BrandProfile {
   topicThemes?: Array<{ theme: string; seeds: string[]; match: string[] }>;
   /** 채널 설명(예: 네이버 블로그 — 제품 활용 하우투·후기 중심). */
   channel?: string;
+  // ── 업종 어휘 프로필(2026-09-07 범용화) — 종전엔 원예 브랜드의 낱말이 코드에 박혀 있었다(나무·묘목·전정…).
+  //    이 저장소는 브랜드 전 단계의 범용 스튜디오라 업종 낱말은 전부 브랜드 설정으로 뺀다. 미설정=업종 중립 기본.
+  /** 소재를 부르는 총칭 명사(예: 식물·수종 / 제품 / 메뉴). 프롬프트의 "대상 ○○" 자리. 미설정='소재'. */
+  subjectNoun?: string;
+  /** 그림으로 구별되는 소재의 특징 축(예: '잎 모양·잎차례·수형·계절 색' / '형태·색·재질·로고 위치'). 이미지 앵커 지시문에 쓴다. */
+  subjectTraits?: string;
+  /** 업종 일반어 — 소재 이름으로 오면 사전을 오염시키고, 주장 대조에서 변별력이 없는 말(예: 나무·묘목·전정·화분). */
+  subjectStopwords?: string[];
+  /** 소재 총칭어(예: 나무·묘목·유실수·조경수 / 제품·상품·모델) — 총칭만으로 된 주제 제한, 소재 앵커 판정, 계열 분류의 범주 제외에 쓴다. */
+  subjectGenericTerms?: string[];
+  /** 검색어 예시(2~3어절, 사람이 실제로 검색창에 치는 꼴 — 예: "매실나무 가지치기"). 주제 제안 프롬프트의 예시. 미설정이면 seedKeywords 앞 3개. */
+  keywordExamples?: string[];
+  /** 검색 의도어(정규식 대안 문자열 목록 — 예: 심기·가지치기·물주기…). 발굴 시드에서 '이 업종 의도가 담긴 검색어'를 고르는 기준. 미설정=범용 의도어. */
+  subjectIntentTerms?: string[];
+  /** 소재 앵커 정규식(선택, 예: '[가-힣]{1,6}나무'). 이름·유래형 주제에 소재가 명시됐는지 판정. 미설정이면 카탈로그 이름으로 판정한다. */
+  subjectAnchorPattern?: string;
+  /** 행위 축 동의어 묶음(예: [[전정, 가지치기], [물주기, 급수]]) — 각 묶음의 첫 항이 표준형. 계열 쿨다운의 결정적 라벨 폴백·매칭 토큰 전개에 쓴다. 미설정=행위 축 없음. */
+  activityAxes?: string[][];
   /** 카드뉴스 기본 이미지 스타일 프리셋(브랜드 고정, 2026-07-22) — 수동·검토탭·자동 파생 전부 적용.
    *  미설정 = 디자이너가 주제 보고 자동 선택. 값 검증은 소비처(resolveForcedPreset)가 담당. */
   cardStyle?: string;
@@ -267,8 +285,81 @@ export function normalizeBrand(raw: Partial<BrandProfile> | null | undefined): B
       .filter((t) => t.theme && (t.seeds.length || t.match.length))
       .slice(0, 24),
     channel: s(raw?.channel, 200),
+    subjectNoun: s(raw?.subjectNoun, 20),
+    subjectTraits: s(raw?.subjectTraits, 120),
+    subjectStopwords: arr(raw?.subjectStopwords, 80, 20),
+    subjectGenericTerms: arr(raw?.subjectGenericTerms, 30, 20),
+    keywordExamples: arr(raw?.keywordExamples, 10, 40),
+    subjectIntentTerms: arr(raw?.subjectIntentTerms, 80, 20),
+    // 정규식은 컴파일이 되는 것만 받는다 — 깨진 패턴이 런타임에 throw 하면 자율 사이클이 통째로 죽는다.
+    activityAxes: (Array.isArray(raw?.activityAxes) ? raw.activityAxes as unknown[] : [])
+      .map((g) => arr(g, 8, 20))
+      .filter((g) => g.length)
+      .slice(0, 20),
+    subjectAnchorPattern: (() => {
+      const v = s(raw?.subjectAnchorPattern, 120);
+      if (!v) return undefined;
+      try { new RegExp(v, 'u'); return v; } catch { return undefined; }
+    })(),
     cardStyle: s(raw?.cardStyle, 40),
   };
+}
+
+// ── 업종 어휘 프로필 접근자(2026-09-07) — 코드는 이 함수들만 보고, 낱말은 브랜드 설정이 준다 ─────────
+/** 소재 총칭 명사 — 프롬프트의 "대상 ○○" 자리. */
+export function subjectNoun(b: BrandProfile | null = getBrand()): string { return b?.subjectNoun || '소재'; }
+/** 소재의 시각 특징 축 — 이미지 앵커 지시문. */
+export function subjectTraits(b: BrandProfile | null = getBrand()): string { return b?.subjectTraits || '형태·색·크기·재질'; }
+/** 업종 표기 — 사실 검증·분류 프롬프트의 역할 문장("너는 ○○ 콘텐츠 …"). */
+export function industryLabel(b: BrandProfile | null = getBrand()): string { return b?.industry?.trim() || '이 브랜드'; }
+/** 업종 중립 기본 불용어 — 어느 업종에서도 소재 이름일 수 없는 말. */
+export const SUBJECT_STOPWORDS_BASE: readonly string[] = [
+  '소재', '제품', '상품', '품종', '종류', '관리', '사용', '방법', '추천', '비교', '후기',
+  '봄', '여름', '가을', '겨울',
+];
+/** 소재 별칭 거절·주장 토큰 제외에 쓰는 업종 일반어 = 기본 + 브랜드 설정 + 총칭어. */
+export function subjectStopwords(b: BrandProfile | null = getBrand()): string[] {
+  return [...new Set([...SUBJECT_STOPWORDS_BASE, ...(b?.subjectStopwords ?? []), ...(b?.subjectGenericTerms ?? [])])];
+}
+/** 소재 총칭어(브랜드 설정). 미설정=빈 목록 → 총칭 규칙은 생략된다. */
+export function subjectGenericTerms(b: BrandProfile | null = getBrand()): string[] { return b?.subjectGenericTerms ?? []; }
+/** 주제 제안 프롬프트의 검색어 예시 — 설정 > 시드 키워드 앞 3개 > 빈 목록(예시 문장 생략). */
+export function keywordExamples(b: BrandProfile | null = getBrand()): string[] {
+  const ex = b?.keywordExamples ?? [];
+  return ex.length ? ex : (b?.seedKeywords ?? []).slice(0, 3);
+}
+/** 업종 중립 검색 의도어 — 어느 업종이든 "정보를 찾는" 검색어에 흔한 말. */
+export const SUBJECT_INTENT_BASE: readonly string[] = [
+  '방법', '추천', '비교', '가격', '종류', '관리', '시기', '고르', '선택', '후기', '사용법', '차이', '장단점',
+  '주의', '준비', '순서', '기준', '체크', '팁', '문제', '해결', '효과', '기간',
+];
+const escapeRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/** 검색 의도어 정규식 = 브랜드 의도어(있으면 그것만) 또는 범용 기본. */
+export function subjectIntentRegex(b: BrandProfile | null = getBrand()): RegExp {
+  const terms = (b?.subjectIntentTerms?.length ? b.subjectIntentTerms : SUBJECT_INTENT_BASE).map(escapeRe);
+  return new RegExp(terms.join('|'));
+}
+/** 행위 축 동의어 묶음(브랜드 설정). terms[0] 이 표준형. 미설정=빈 목록. */
+export function activityAxes(b: BrandProfile | null = getBrand()): Array<{ terms: string[] }> {
+  return (b?.activityAxes ?? []).filter((g) => g.length).map((g) => ({ terms: [...g] }));
+}
+/** 소재 카탈로그의 이름·별칭 → 정식명 표(브랜드 설정 + 소재 사전은 부르는 쪽이 합친다). 긴 이름이 먼저 오게 정렬. */
+export function subjectNameTable(b: BrandProfile | null = getBrand()): Array<{ key: string; name: string }> {
+  const out: Array<{ key: string; name: string }> = [];
+  for (const g of b?.speciesCatalog ?? []) for (const sp of g.species) {
+    out.push({ key: sp.name, name: sp.name });
+    for (const a of sp.aliases ?? []) out.push({ key: a, name: sp.name });
+  }
+  return out.filter((x) => x.key).sort((a, c) => c.key.length - a.key.length);
+}
+/** 소재 앵커 판정기 — 설정 정규식 > 카탈로그 이름·별칭 포함 > null(판정 불가 = 통과시켜라). */
+export function subjectAnchorTest(b: BrandProfile | null = getBrand()): ((text: string) => boolean) | null {
+  if (b?.subjectAnchorPattern) {
+    try { const re = new RegExp(b.subjectAnchorPattern, 'u'); return (t) => re.test(t); } catch { /* normalize 가 걸렀어야 한다 */ }
+  }
+  const names = (b?.speciesCatalog ?? []).flatMap((g) => g.species.flatMap((sp) => [sp.name, ...(sp.aliases ?? [])])).filter(Boolean);
+  if (!names.length) return null;
+  return (t) => names.some((n) => t.includes(n));
 }
 
 /**
@@ -285,21 +376,21 @@ export function lexiconGuide(
     + '① 일반 독자가 모르는 압축 한자어는 쉬운 말로 풀어 쓴다. 특히 다른 뜻으로 먼저 읽히는 말 금지'
     + '(실측 유출: 방조→범죄로, 시비→싸움으로, 동해→바다로 먼저 읽힌다). '
     + '② 사전에 없는 조어·억지 명사화 금지(실측: "무개화", "첫 식재자들", "네 가지 쉬움"). '
-    + '③ 핵심 키워드는 명사구 그대로 자연스럽게 넣는다 — 키워드에 어미를 붙여 동사화하지 마라("묘목선별하면" 식 금지). '
+    + '③ 핵심 키워드는 명사구 그대로 자연스럽게 넣는다 — 키워드에 어미를 붙여 동사화하지 마라("소재선별하면" 식 금지). '
     + '④ 요약·마무리에서 서로 무관한 두 내용을 "-고"로 잇지 마라(지시문+설명문 접합 비문 실측). '
     + '조사 결합이 다른 말로 읽히면 어순을 바꿔라("뿌리혹은"→"혹은"으로 오독). '
     + '⑤ 강의 소개투·면책 문구 금지 — "~의 3가지를 배웁니다"·"~실용 가이드입니다"·"어떤 주장도 하지 않습니다" 류'
     + '(본문·메타 설명 모두 — 실측: 가드 후에도 메타에 "배웁니다" 잔존). '
     // 요약투 예시 교체(2026-08-27 말투 감사 권고 2) — 종전 예시("정리했습니다/알아봅니다처럼 블로그 말투로")가
     // 오히려 메타 요약투를 권장해 검색 스니펫·유튜브 설명이 통째로 템플릿이 됐다. 강의 소개투 금지(⑤)는 그대로 유지.
-    + '메타 요약투 금지 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 로 요약·설명을 끝내지 마라. 요약·설명은 "결론 한 줄 + 조건 한 줄" 꼴로 쓴다(예: "잎이 상한 나무는 9월에 비료를 줘도 소용없습니다. 갈변이 어디서 시작됐는지부터 보세요."). '
+    + '메타 요약투 금지 — "정리했습니다/담았어요/알아봅니다/알아보세요/살펴봅니다/소개합니다" 로 요약·설명을 끝내지 마라. 요약·설명은 "결론 한 줄 + 조건 한 줄" 꼴로 쓴다(예: "겉만 보고 고르면 두 달 안에 후회합니다. 규격표의 두 줄부터 보세요."). '
     // ⑥⑦: 난이도·어투 감사(2026-08-12, 사용자 제보 "갈립니다" 실측 — 두 편에서 4회 반복된 채널 지문) 대응.
     + '⑥ 문어 판정어는 일상어로 — "갈리다/갈라지다"(구별 뜻)→"구분돼요/달라져요", "판별·판가름·가늠"→"가려내다/확인하다", '
-    + '"특정하다"→"콕 집어 확인하다", "개체"→"그 나무", "관수"→"물 주기", "공정"→"과정". '
+    + '"특정하다"→"콕 집어 확인하다", "개체"→"그 하나", "공정"→"과정". '
     + '"~하는 판단도 있습니다"·"~느냐 아니냐" 같은 명사화·논설 종결도 말로 풀어라("~하는 것도 한 방법이에요"). '
-    + '⑦ 실무 용어는 처음 나올 때 반 문장으로 풀어라 — "뿌리분(뿌리와 흙이 뭉친 덩어리)", "도장지(위로만 웃자란 가지)", '
-    + '"수관(가지와 잎이 이루는 윗부분)" — 판단 기준·행동 지시 자리에 미해설 용어를 두지 마라(실측: "뿌리분 가장자리에 꽂으세요"가 초보를 세운다). '
-    + '같은 작업을 다른 이름으로 바꿔 부르지 마라(실측: 한 글에서 가지치기→전지→본전정 혼용).'
+    + '⑦ 실무 용어는 처음 나올 때 반 문장으로 풀어라 — "전문어(쉬운 말 풀이)" 꼴 — '
+    + '판단 기준·행동 지시 자리에 미해설 용어를 두지 마라(실측: 미해설 용어가 든 지시문이 초보를 세운다). '
+    + '같은 작업을 다른 이름으로 바꿔 부르지 마라(실측: 한 글에서 같은 작업을 세 이름으로 혼용).'
     // ⑧ 허용 목록(2026-08-28 사용자 확정) — ①⑦ 과 lexemeAvoid 가 합쳐지면 "한자어=위험" 신호가 돼 업종
     // 상용어까지 우회한다. 실측: "전정" 0회 · "1년에 가위를 몇 번 들 수 있는가"(한국어에 없는 표현).
     // ①⑦ 바로 뒤에 둬 그 압력을 받는 자리에서 곧바로 예외를 세운다 — 떨어뜨리면 앞의 금지가 이긴다.
@@ -371,16 +462,16 @@ export function brandSeedKeywords(b: BrandProfile | null = getBrand()): string[]
 // 채소·화초 콘텐츠가 계속 생산됐다(실측). banned 프로즈에서 기계 대조용 토큰을 도출해
 // 주제 발굴·리서치 미션·예고 등록/이행에서 하드 차단한다.
 /** banned 프로즈 → 대조 토큰(순수). 브랜드의 정상 소재어와 겹칠 수 있는 범용어는 제외. */
-const SCOPE_STOPWORDS = new Set([
-  '주제', '콘텐츠', '브랜드', '무관', '금지', '등', '및', '아닌', '나무', '묘목',
-  '식물', '화분', '실내', '베란다', '작물', '꽃', '가을', '여름', '겨울',
-  // '모종' — banned 프로즈의 "꽃 모종"에서 토큰이 새어 정상 업종어까지 차단했다(실측 2026-08-01:
-  // 성과 최상위였던 "8월 과실나무 모종…" 류가 지금은 코드로 기각). 금지 의도는 '꽃'·구체 화종이 담당한다.
-  '모종',
-]);
+// 업종 중립 기본 — banned 프로즈의 문장 성분. 브랜드의 정상 소재어(원예라면 나무·묘목·식물·화분·꽃·모종 —
+// 실측 2026-08-01: '모종'이 새어 "8월 과실나무 모종…" 류를 기각했다)는 subjectGenericTerms·subjectStopwords 가 준다.
+const SCOPE_STOPWORDS_BASE = ['주제', '콘텐츠', '브랜드', '무관', '금지', '등', '및', '아닌', '봄', '여름', '가을', '겨울'];
+function scopeStopwords(b: BrandProfile | null): Set<string> {
+  return new Set([...SCOPE_STOPWORDS_BASE, ...(b?.subjectGenericTerms ?? []), ...(b?.subjectStopwords ?? [])]);
+}
 export function bannedTopicTerms(b: BrandProfile | null = getBrand()): string[] {
   // 조사 붙은 형태("나무가"·"브랜드와")가 토큰으로 새면 정상 소재("배롱나무 가을…")를 오탐한다(실측) —
   // 토큰 자체 또는 끝 한 글자(조사) 뗀 형태가 스톱워드면 제외.
+  const SCOPE_STOPWORDS = scopeStopwords(b);
   const isStop = (t: string): boolean => SCOPE_STOPWORDS.has(t) || (t.length > 2 && SCOPE_STOPWORDS.has(t.slice(0, -1)));
   const out = new Set<string>();
   for (const s of b?.banned ?? []) {

@@ -1,31 +1,32 @@
 /**
- * 보관소 딱지로 수종 사전을 배운다(2026-09-05) — 사장님이 소재에 적어 둔 이름이 곧 근거다.
+ * 보관소 딱지로 소재 사전을 배운다(2026-09-05) — 운영자가 소재에 적어 둔 이름이 곧 근거다.
  *
- * 왜 필요한가. 사장님이 '백일홍' 딱지로 올린 영상이 '배롱나무 묘목' 편에서 배제됐다. 같은
- * 나무인데 사전의 별칭 표에 그 이름이 없었다. 사람이 매번 사전을 고치게 두면 같은 일이
+ * 왜 필요한가. 운영자가 '백일홍' 딱지로 올린 영상이 '배롱나무 묘목' 편에서 배제됐다. 같은
+ * 소재인데 사전의 별칭 표에 그 이름이 없었다. 사람이 매번 사전을 고치게 두면 같은 일이
  * 반복된다 — 소재를 올리는 순간이 그 이름을 배울 가장 좋은 시점이다.
  *
- * 왜 '새 수종 추가'로는 안 되는가(중요). appendSpecies 는 학명이 겹치면 건너뛴다. 백일홍의
- * 학명은 Lagerstroemia indica 로 배롱나무와 같으므로, 새 수종으로 넣으려 하면 조용히
+ * 왜 '새 소재 추가'로는 안 되는가(중요). appendSpecies 는 학명이 겹치면 건너뛴다. 백일홍의
+ * 학명은 Lagerstroemia indica 로 배롱나무와 같으므로, 새 소재로 넣으려 하면 조용히
  * 아무 일도 안 하고 끝난다. 이번 사고를 만든 그 경로다. 그래서 배워야 할 것은 '별칭'이다.
  *
  * 세 갈래로 나뉜다:
  *   1. 사전이 이미 아는 이름 → 할 일 없음
- *   2. 아는 수종의 다른 이름  → 그 수종의 aliases 에 덧붙인다  ← 이번 사고가 여기였다
- *   3. 정말 처음 보는 식물   → 새 항목으로 넣는다(auto·verified:false)
+ *   2. 아는 소재의 다른 이름  → 그 소재의 aliases 에 덧붙인다  ← 이번 사고가 여기였다
+ *   3. 정말 처음 보는 소재   → 새 항목으로 넣는다(auto·verified:false)
  *
  * 2와 3을 가르는 데는 지식이 필요해서 LLM 이 판정한다. 실패는 전부 삼킨다 — 사전을 못
  * 배웠다고 업로드가 실패하면 안 된다.
  */
 import type { Species } from './species';
 import { normalizeLatinName } from './species';
+import { SUBJECT_STOPWORDS_BASE, subjectStopwords } from './brand';
 
 /**
  * 별칭으로 써도 되는 이름인가(순수) — 이 파일에서 가장 중요한 함수다.
  *
  * findSpecies 는 `text.includes(key)` 다. 짧은 별칭 하나가 사전 전체를 망가뜨린다:
  * '배'를 넣으면 "배수·배치·배양토"가 전부 배나무가 되고, '밤'을 넣으면 "한밤중 물주기"가
- * 밤나무가 된다. 그러면 주제→수종 판정이 프로젝트 전체에서 틀어진다 — 소재 매칭만의
+ * 밤나무가 된다. 그러면 주제→소재 판정이 프로젝트 전체에서 틀어진다 — 소재 매칭만의
  * 문제가 아니다.
  *
  * 사람이 커밋하는 별칭은 테스트가 지킨다(species.test.ts 의 충돌 검사). 그러나 여기서
@@ -34,49 +35,51 @@ import { normalizeLatinName } from './species';
  */
 export const ALIAS_MIN_LENGTH = 2;
 
-/** 원예 문장에 흔히 나오는 말 — 수종 이름으로 오면 사전을 오염시킨다. */
-export const ALIAS_STOPWORDS: readonly string[] = [
-  '나무', '묘목', '모종', '식물', '수목', '조경수', '정원수', '유실수', '관목', '교목',
-  '열매', '과일', '꽃', '잎', '가지', '뿌리', '줄기', '수피', '씨앗', '종자',
-  '심기', '전정', '가지치기', '관리', '물주기', '거름', '비료', '분갈이', '화분',
-  '봄', '여름', '가을', '겨울', '정원', '텃밭', '화단', '울타리', '생울타리',
-];
+/**
+ * 업종 중립 기본 불용어(2026-09-07 범용화) — 종전엔 원예 낱말(나무·묘목·전정·화분…)이 여기 박혀 있었다.
+ * 업종 낱말은 브랜드 설정(subjectStopwords)이 준다. 이 상수는 그 기본값이자 하위 호환용 별칭이다.
+ */
+export const ALIAS_STOPWORDS: readonly string[] = SUBJECT_STOPWORDS_BASE;
 
 export interface AliasVerdict { ok: boolean; reason?: string }
 
 /**
- * @param alias  붙이려는 별칭(사장님이 소재에 적은 이름)
- * @param target 이 별칭을 붙일 수종의 표준명
+ * @param alias  붙이려는 별칭(운영자가 소재에 적은 이름)
+ * @param target 이 별칭을 붙일 소재의 표준명
  * @param list   현재 사전 전체
+ * @param stopwords 업종 일반어 — 미지정이면 브랜드 설정(기본 + subjectStopwords + subjectGenericTerms)
  */
-export function checkAlias(alias: string, target: string, list: readonly Species[]): AliasVerdict {
+export function checkAlias(
+  alias: string, target: string, list: readonly Species[],
+  stopwords: readonly string[] = subjectStopwords(),
+): AliasVerdict {
   const a = String(alias ?? '').trim();
   const t = String(target ?? '').trim();
   if (!a) return { ok: false, reason: '빈 이름' };
-  if (!t) return { ok: false, reason: '붙일 수종이 없음' };
+  if (!t) return { ok: false, reason: '붙일 소재가 없음' };
   if (a === t) return { ok: false, reason: '표준명과 같음' };
   if (a.length < ALIAS_MIN_LENGTH) {
     return { ok: false, reason: `${ALIAS_MIN_LENGTH}자 미만 — 한 글자는 아무 문장에나 걸린다` };
   }
-  if (ALIAS_STOPWORDS.includes(a)) return { ok: false, reason: '원예 일반 표현' };
+  if (stopwords.includes(a)) return { ok: false, reason: '업종 일반 표현' };
 
-  // 대상 수종이 사전에 있어야 별칭을 붙일 수 있다
+  // 대상 소재가 사전에 있어야 별칭을 붙일 수 있다
   const targetSp = list.find((s) => s.name === t);
-  if (!targetSp) return { ok: false, reason: `사전에 없는 수종(${t})` };
+  if (!targetSp) return { ok: false, reason: `사전에 없는 소재(${t})` };
 
-  // 대상 수종이 이미 가진 이름들 — 이 이름들과의 포함 관계는 문제가 아니다(같은 나무니까)
+  // 대상 소재가 이미 가진 이름들 — 이 이름들과의 포함 관계는 문제가 아니다(같은 소재니까)
   const own = new Set<string>([targetSp.name, ...(targetSp.aliases ?? [])]);
   if (own.has(a)) return { ok: false, reason: '이미 있음' };
 
   for (const sp of list) {
     for (const key of [sp.name, ...(sp.aliases ?? [])]) {
       if (!key || own.has(key)) continue;
-      // 별칭이 '다른 수종 이름의 일부'면, 그 수종 문장이 이 별칭에 걸린다.
+      // 별칭이 '다른 소재 이름의 일부'면, 그 소재 문장이 이 별칭에 걸린다.
       // 예: '나무'는 배롱나무·밤나무 안에 다 들어 있다.
-      if (key.includes(a)) return { ok: false, reason: `다른 수종 이름에 포함됨(${key})` };
-      // 별칭이 '다른 수종 이름을 품고' 있으면, 더 긴 이름이 이겨서 그 수종을 가로챈다.
+      if (key.includes(a)) return { ok: false, reason: `다른 소재 이름에 포함됨(${key})` };
+      // 별칭이 '다른 소재 이름을 품고' 있으면, 더 긴 이름이 이겨서 그 소재를 가로챈다.
       // 예: '수국비료'를 다른 종 별칭으로 넣으면 수국 이야기가 그쪽으로 끌려간다.
-      if (a.includes(key)) return { ok: false, reason: `다른 수종 이름을 품음(${key})` };
+      if (a.includes(key)) return { ok: false, reason: `다른 소재 이름을 품음(${key})` };
     }
   }
   return { ok: true };
@@ -85,7 +88,7 @@ export function checkAlias(alias: string, target: string, list: readonly Species
 /** LLM 판정 결과 — 보관소 딱지 하나를 어떻게 처리할지. */
 export interface LabelVerdict {
   kind: 'alias' | 'new' | 'unknown';
-  /** kind==='alias' 일 때 어느 수종의 다른 이름인지(표준명). */
+  /** kind==='alias' 일 때 어느 소재의 다른 이름인지(표준명). */
   of?: string;
   latin?: string;
   type?: string;
@@ -132,7 +135,7 @@ export function readVerdict(raw: unknown, list: readonly Species[]): LabelVerdic
   const kind = String(o['kind'] ?? '').trim();
   if (kind === 'alias') {
     const of = str('of');
-    // 사전에 실제로 있는 수종이어야 한다 — LLM 이 지어낸 표준명에 별칭을 붙이면 안 된다
+    // 사전에 실제로 있는 소재여야 한다 — LLM 이 지어낸 표준명에 별칭을 붙이면 안 된다
     if (of && list.some((s) => s.name === of)) return { kind: 'alias', of };
     return { kind: 'unknown' };
   }
@@ -185,17 +188,17 @@ export async function learnSpeciesLabel(
     if (v.kind === 'alias' && v.of) {
       const gate = checkAlias(name, v.of, list);
       if (!gate.ok) {
-        const msg = `수종 별칭 보류 — '${name}' → ${v.of} (${gate.reason})`;
+        const msg = `소재 별칭 보류 — '${name}' → ${v.of} (${gate.reason})`;
         deps.log?.(msg);
         return msg;
       }
-      if (deps.addAlias(v.of, name)) return `수종 별칭 학습 — '${name}' 은 ${v.of} 의 다른 이름`;
+      if (deps.addAlias(v.of, name)) return `소재 별칭 학습 — '${name}' 은 ${v.of} 의 다른 이름`;
       return undefined;
     }
 
     if (v.kind === 'new' && v.latin) {
       if (deps.addSpecies({ name, latin: v.latin, ...(v.type ? { type: v.type } : {}), ...(v.leaf ? { leaf: v.leaf } : {}), ...(v.form ? { form: v.form } : {}), ...(v.flower ? { flower: v.flower } : {}), ...(v.fruit ? { fruit: v.fruit } : {}) })) {
-        return `수종 사전 추가 — ${name} (${v.latin}) · 형태 미검토`;
+        return `소재 사전 추가 — ${name} (${v.latin}) · 형태 미검토`;
       }
       return undefined;
     }

@@ -4,7 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   contentTokens, familyVolume, seasonIndex, demandScore, demandVerdict, formatDemandLine,
-  buildDemandBlock, assessCandidatesDemand, type DemandRow, type DemandSnap, BLOCK_ROWS, SNAP_MAX_SEEDS, MAX_WINNER_SEEDS } from './topicDemand';
+  buildDemandBlock, assessCandidatesDemand, type DemandRow, type DemandSnap, BLOCK_ROWS, SNAP_MAX_SEEDS, MAX_WINNER_SEEDS, DEMAND_STOPWORDS } from './topicDemand';
 
 // 커넥터는 전량 가짜 — 실제 네이버 호출 없이 묶음 호출 횟수·매핑만 검증한다.
 const H = vi.hoisted(() => ({
@@ -47,8 +47,10 @@ describe('contentTokens — 후보 키워드의 내용 토큰(순수)', () => {
   it('"~나무" 복합어는 유지한다', () => {
     expect(contentTokens('사과나무 비료')).toEqual(['사과나무', '비료']);
   });
-  it('단독 "나무"는 불용어라 뺀다(계열 대조를 무의미하게 넓히므로)', () => {
-    expect(contentTokens('나무 거름 주는 시기')).toEqual(['거름']);
+  it('브랜드 총칭어(원예의 단독 "나무")는 불용어라 뺀다 — 계열 대조를 무의미하게 넓히므로', () => {
+    // 범용 기본에는 업종 총칭어가 없다(2026-09-07) — 브랜드 subjectGenericTerms 가 준다.
+    expect(contentTokens('나무 거름 주는 시기', new Set([...DEMAND_STOPWORDS, '나무']))).toEqual(['거름']);
+    expect(contentTokens('나무 거름 주는 시기', DEMAND_STOPWORDS)).toEqual(['나무', '거름']);
   });
 });
 

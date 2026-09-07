@@ -71,7 +71,7 @@ function localDateStr(d = new Date()): string {
 export async function refreshTrendSnapshot(signal?: AbortSignal): Promise<void> {
   try {
     const slug = activeBrandSlug();
-    const seeds = discoverySeeds(MAX_SEEDS);   // 카탈로그 회전(2026-08-27) — 안 다룬 수종부터 자동완성을 긁는다
+    const seeds = discoverySeeds(MAX_SEEDS);   // 카탈로그 회전(2026-08-27) — 안 다룬 소재부터 자동완성을 긁는다
     if (!seeds.length) return;
     const today = localDateStr();
     const cur = readTrendSnap(slug);

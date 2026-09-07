@@ -14,7 +14,7 @@
  * 왜 문자열 포함 검사로는 안 되는가 — 파생물은 복붙이 아니라 재작성이다(실측 유사도 38~56%).
  *   원문 걸림: "회양목 - 겨울 잎 남습니다, 새순이 굳는 초여름에 한 번"
  *   파생 재등장: "회양목: 초여름 한 번"
- * 그래서 **핵심 토큰 공동 출현**으로 본다: 주장에서 변별력 있는 토큰(수종명·시기어·수치)을 뽑아,
+ * 그래서 **핵심 토큰 공동 출현**으로 본다: 주장에서 변별력 있는 토큰(소재명·시기어·수치)을 뽑아,
  * 파생 텍스트에 그중 둘 이상이 함께 나타나면 '같은 주장의 재등장'으로 판정한다.
  *
  * 성격: 비차단·표시 전용. 파생물은 자동 발행이 없고(사람이 검토 탭·텔레그램에서 발행), 이 판정은
@@ -23,6 +23,8 @@
  *
  * 킬스위치: INHERITED_CLAIMS=off.
  */
+import { subjectStopwords } from './brand';
+
 
 /** 승계 판정 결과 — 어느 원문 주장이 어느 파생 필드에 재등장했는가. */
 export interface InheritedClaim {
@@ -41,25 +43,35 @@ export interface InheritedClaim {
 const TOKEN_RE = /[가-힣]{2,}|\d+(?:\.\d+)?\s*(?:cm|mm|m|kg|g|도|년|월|일|주|번|개|%)/g;
 
 /**
- * 불용어 — 원예 글 어디에나 나와 변별력이 없는 말. 이게 없으면 "나무"·"가지" 하나로 무관한 주장이 엮인다.
- * 실코퍼스에서 빈출 순으로 골랐다(수종명·시기어는 절대 넣지 않는다 — 그게 판정의 핵심 신호다).
+ * 불용어 기본 — 업종을 안 가리고 어디에나 나와 변별력이 없는 말(어미·접속사·범용 명사).
+ * 실코퍼스에서 빈출 순으로 골랐다(소재명·시기어는 절대 넣지 않는다 — 그게 판정의 핵심 신호다).
+ * 업종 낱말(원예라면 나무·묘목·가지·잎)은 여기가 아니라 브랜드 subjectStopwords 가 준다 —
+ * 이게 없으면 "나무"·"가지" 하나로 무관한 주장이 엮인다.
  */
-const STOP: ReadonlySet<string> = new Set([
-  '나무', '나무가', '나무를', '나무는', '나무의', '묘목', '가지', '가지가', '가지를', '잎이', '잎을',
+const STOP_BASE: ReadonlySet<string> = new Set([
   '있습니다', '없습니다', '합니다', '합니다만', '됩니다', '입니다', '주세요', '보세요', '해요', '예요',
   '그리고', '하지만', '그래서', '다만', '경우', '정도', '때는', '때가', '보통', '대개', '흔히',
   '이렇게', '그렇게', '여기서', '거기서', '자리', '모양', '상태', '방법', '기준', '차이',
   '수분', '관리', '작업', '사용', '확인', '필요', '가능', '시작', '이상', '이하', '먼저', '다음',
 ]);
 
-/** 주장·텍스트에서 변별 토큰 집합을 뽑는다. 순수. */
-export function salientTokens(text: string): Set<string> {
+/**
+ * 주장·텍스트에서 변별 토큰 집합을 뽑는다. 순수.
+ * extraStop 미지정이면 브랜드 업종 일반어(subjectStopwords) — 호출부는 한 번 계산해 넘기는 편이 싸다.
+ */
+/** 시기어(계절)는 판정의 핵심 신호라 불용어에서 되살린다 — 업종 기본 목록엔 별칭 거절용으로 계절이 들어 있다. */
+const SEASON_WORDS: ReadonlySet<string> = new Set(['봄', '여름', '가을', '겨울']);
+export function claimStopwords(): Set<string> {
+  return new Set([...subjectStopwords()].filter((t) => !SEASON_WORDS.has(t)));
+}
+export function salientTokens(text: string, extraStop: Iterable<string> = claimStopwords()): Set<string> {
   const out = new Set<string>();
+  const stop = extraStop instanceof Set ? extraStop : new Set(extraStop);
   for (const m of text.matchAll(TOKEN_RE)) {
     let t = m[0].replace(/\s+/g, '');
     // 흔한 조사 꼬리 제거 — "회양목은"·"초여름에"가 "회양목"·"초여름"과 같은 토큰이 되게.
     t = t.replace(/(?:은|는|이|가|을|를|의|에|에서|엔|와|과|도|만|부터|까지|으로|로)$/, '');
-    if (t.length >= 2 && !STOP.has(t)) out.add(t);
+    if (t.length >= 2 && !STOP_BASE.has(t) && !stop.has(t)) out.add(t);
   }
   return out;
 }
@@ -71,7 +83,7 @@ function shared(a: Set<string>, b: Set<string>): string[] {
   return out;
 }
 
-/** 판정 문턱 — 공동 출현 토큰 수. 1이면 수종명 하나만 겹쳐도 걸려 과차단이 된다(같은 나무의 다른 이야기). */
+/** 판정 문턱 — 공동 출현 토큰 수. 1이면 소재명 하나만 겹쳐도 걸려 과차단이 된다(같은 소재의 다른 이야기). */
 const MIN_SHARED = 2;
 
 /**
@@ -88,10 +100,11 @@ export function inheritedClaims(
 ): InheritedClaim[] {
   if (process.env.INHERITED_CLAIMS === 'off') return [];
   const out: InheritedClaim[] = [];
-  const claimTokens = flagged.map((c) => ({ claim: c, tokens: salientTokens(c) }));
+  const stop = claimStopwords(); // 브랜드 목록은 한 번만 읽는다 — 문장마다 다시 만들 이유가 없다
+  const claimTokens = flagged.map((c) => ({ claim: c, tokens: salientTokens(c, stop) }));
   for (const f of fields) {
     if (!f.text?.trim()) continue;
-    const ft = salientTokens(f.text);
+    const ft = salientTokens(f.text, stop);
     for (const c of claimTokens) {
       // 원문 주장 자체의 토큰이 빈약하면(예: "그렇습니다") 어떤 텍스트와도 우연히 엮인다 — 건너뛴다.
       if (c.tokens.size < MIN_SHARED) continue;

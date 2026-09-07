@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest';
-import { inheritedClaims, formatInherited, salientTokens } from './inheritedClaims';
+import { inheritedClaims, formatInherited, salientTokens, claimStopwords } from './inheritedClaims';
 
 // 고정 표본 — 실사고(piece_8d9113cdde 블로그 hold ↔ short_b894bf71fb 파생 pass)의 실제 문자열.
 // 원문 게이트가 '근거 미확인'으로 분류한 손질 시기가 파생 숏폼 화면 목록에 그대로 떴다.
@@ -55,8 +55,14 @@ describe('salientTokens', () => {
   });
 
   it('변별력 없는 흔한 말은 토큰에서 뺀다 — 이게 없으면 무관한 주장이 "나무"로 엮인다', () => {
-    const t = salientTokens('나무 가지 관리 방법');
+    // 업종 낱말(나무·가지)은 브랜드 subjectStopwords 가 준다 — 원예 브랜드가 줄 목록을 명시한다.
+    const t = salientTokens('나무 가지 관리 방법', ['나무', '가지']);
     expect([...t]).toEqual([]);
+  });
+
+  it('넘긴 업종 일반어만큼만 뺀다 — 목록에 없으면 변별 토큰으로 남는다', () => {
+    expect(salientTokens('나무 가지 관리 방법', []).has('나무')).toBe(true);
+    expect(salientTokens('나무 가지 관리 방법', ['나무']).has('가지')).toBe(true);
   });
 });
 
@@ -88,5 +94,13 @@ describe('formatInherited', () => {
     const long = `회양목 초여름 ${'가'.repeat(200)}`;
     const [hit] = inheritedClaims([long], [{ field: 'X', text: '회양목 초여름 한 번' }]);
     expect(formatInherited(hit!)).toContain('…');
+  });
+});
+
+describe('claimStopwords — 계절어는 불용어가 아니다(시기어가 판정의 핵심 신호)', () => {
+  it('업종 기본 불용어에 든 계절이 주장 대조에서는 살아난다', () => {
+    const stop = claimStopwords();
+    for (const w of ['봄', '여름', '가을', '겨울']) expect(stop.has(w)).toBe(false);
+    expect(salientTokens('겨울에 잎이 남습니다').has('겨울')).toBe(true);
   });
 });

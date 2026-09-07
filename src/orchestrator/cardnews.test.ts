@@ -391,7 +391,7 @@ describe('ctaSlideIssues — 질문형 마무리도 인정', () => {
   });
 });
 
-describe('buildCardImagePrompt — 수종 앵커(2026-09-06)', () => {
+describe('buildCardImagePrompt — 소재 앵커(2026-09-06)', () => {
   const base = {
     headline: '결실주가 보증하는 건 나이와 형태뿐', scene: '어린 대추나무 전체 실루엣',
     style: '아이보리 종이 질감', title: '대추나무 결실주', index: 1, total: 8,
@@ -399,16 +399,16 @@ describe('buildCardImagePrompt — 수종 앵커(2026-09-06)', () => {
   };
   it('앵커를 주면 학명과 형태를 못박는다 — 카드뉴스엔 이게 아예 없었다', () => {
     const p = buildCardImagePrompt({ ...base, subject: '대추나무 — 활엽 교목, 잎맥 세 개', subjectLatin: 'Ziziphus jujuba' });
-    expect(p).toContain('[대상 식물 — 화면의 나무·풀은 반드시 이 종]');
+    expect(p).toContain('[대상 소재 — 화면의 대상은 반드시 이것]');
     expect(p).toContain('Ziziphus jujuba');
     expect(p).toContain('잎맥 세 개');
-    expect(p).toContain('다른 종으로 대체하거나');
+    expect(p).toContain('다른 것으로 대체하거나');
   });
   it('앵커가 없으면 종전대로 무주입 — 수종 없는 주제를 막지 않는다', () => {
-    expect(buildCardImagePrompt(base)).not.toContain('[대상 식물');
+    expect(buildCardImagePrompt(base)).not.toContain('[대상 소재');
   });
   it('앵커는 전체 톤 바로 뒤에 온다 — 장면 설명보다 앞이라야 종이 먼저 정해진다', () => {
     const p = buildCardImagePrompt({ ...base, subjectLatin: 'Ziziphus jujuba' });
-    expect(p.indexOf('[대상 식물')).toBeLessThan(p.indexOf('장면 설명'));
+    expect(p.indexOf('[대상 소재')).toBeLessThan(p.indexOf('장면 설명'));
   });
 });

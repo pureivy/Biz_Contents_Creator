@@ -16,7 +16,7 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { activeBrandSlug, brandSeedKeywords, getBrand, offBrandTerm } from '../content/brand';
+import { activeBrandSlug, brandSeedKeywords, getBrand, offBrandTerm, subjectGenericTerms } from '../content/brand';
 import { discoverySeeds, looksLikeGardenQuery, brandSpeciesCoverage, brandThemeCoverage } from './discoverySeeds';
 import { overThemeCap } from '../content/topicThemes';
 import { overSpeciesCap } from '../content/speciesRotation';
@@ -51,19 +51,23 @@ export interface DemandSnap { date: string; rows: DemandRow[] }
  */
 export const DEMAND_STOPWORDS: ReadonlySet<string> = new Set([
   '시기', '시기별', '방법', '법', '주는', '하는', '전', '후', '언제', '어떻게',
-  '하기', '되는', '좋은', '나무', '정리', '총정리',
+  '하기', '되는', '좋은', '정리', '총정리',
 ]);
+/** 계열 대조 불용어 = 기본 + 브랜드 총칭어(원예라면 '나무' — 단독 총칭만, 복합어 '사과나무'는 내용어다). */
+export function demandStopwords(b = getBrand()): Set<string> {
+  return new Set([...DEMAND_STOPWORDS, ...subjectGenericTerms(b)]);
+}
 
 const MAX_ASSESS = 10;    // 검색광고 힌트 5개/콜 × 2콜 — 한 라운드 후보 수 상한
 const MAX_TREND = 5;      // 데이터랩 1콜 상한(그리고 스냅샷 묶음 크기)
 // 스냅샷 폭(2026-09-01 사용자 확정: "검색축을 앞당겨 줘") — 15 → 40.
-// 종전 15칸은 winners 5 + 창 10 이었고, 창의 절반을 수종과 나눠 **하루 축 시드가 2개뿐**이었다.
+// 종전 15칸은 winners 5 + 창 10 이었고, 창의 절반을 소재와 나눠 **하루 축 시드가 2개뿐**이었다.
 // 24축을 도는 데 12일이 걸리니 표가 늘 과거 성과 키워드로 채워졌고, 검색 데이터가 '고른 뒤 떨어뜨리는
 // 브레이크'로만 작동했다(기각 3위 '검색 수요 미달' 31건). 40칸이면 축 시드가 하루 ~9개 돌아
 // 표 자체가 '지금 시즌에 검색량 있는 키워드'의 실측 목록이 된다 — 그래야 액셀로 쓸 수 있다.
 // 비용: 5개 묶음마다 검색광고 ≤2콜 + 데이터랩 1콜 → 하루 6콜에서 ~16콜(킬스위치 off 면 0).
 export const SNAP_MAX_SEEDS = 40;
-export const MAX_WINNER_SEEDS = 8;   // winners 몫(나머지는 발굴 창 — 수종·주제 축 시드 회전)
+export const MAX_WINNER_SEEDS = 8;   // winners 몫(나머지는 발굴 창 — 소재·주제 축 시드 회전)
 const STALE_DAYS = 3;     // 수요는 주 단위로 움직인다 — 이보다 낡은 스냅샷은 '실측'이라 부르지 않는다
 // 표에서 두뇌에 보여줄 행 수 — 시드가 40으로 늘어 상위만 잘라 보여도 축이 골고루 담긴다.
 export const BLOCK_ROWS = 16;
@@ -83,10 +87,10 @@ function dayOfYear(d: Date): number {
 }
 
 /** 후보 키워드 → 계열 대조용 내용 토큰(순수). 2자 미만·불용어 제거. */
-export function contentTokens(keyword: string): string[] {
+export function contentTokens(keyword: string, stop: ReadonlySet<string> = demandStopwords()): string[] {
   return (keyword || '').split(/\s+/)
     .map((t) => t.trim())
-    .filter((t) => t.length >= 2 && !DEMAND_STOPWORDS.has(t));
+    .filter((t) => t.length >= 2 && !stop.has(t));
 }
 
 /**

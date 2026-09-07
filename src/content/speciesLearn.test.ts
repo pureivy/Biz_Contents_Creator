@@ -4,11 +4,15 @@ import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { checkAlias, labelQuestion, readVerdict, learnSpeciesLabel, ALIAS_STOPWORDS } from './speciesLearn';
+import { SUBJECT_STOPWORDS_BASE } from './brand';
 import { loadSpecies, appendSpeciesAlias, findSpecies, resetSpeciesCache } from './species';
 import type { Species } from './species';
 
 const sp = (name: string, latin: string, aliases?: string[]): Species =>
   ({ name, latin, ...(aliases ? { aliases } : {}) }) as Species;
+
+/** 원예 브랜드가 설정으로 주던 업종 일반어 — 범용화 후에는 코드가 아니라 brand.yaml 이 준다. */
+const HORT_STOPWORDS = ['나무', '묘목', '모종', '전정', '가지치기', '물주기', '거름', '분갈이', '화분'];
 
 const LIST: Species[] = [
   sp('배롱나무', 'Lagerstroemia indica', ['백일홍나무', '흰배롱나무']),
@@ -19,7 +23,7 @@ const LIST: Species[] = [
 ];
 
 describe('checkAlias — 자동 별칭 거절 규칙(순수)', () => {
-  it('사장님이 실제로 쓴 이름은 통과한다', () => {
+  it('운영자가 실제로 쓴 이름은 통과한다', () => {
     // 이 사건의 이름 — 이게 막히면 기능 자체가 무의미하다
     expect(checkAlias('백일홍', '배롱나무', LIST).ok).toBe(true);
     expect(checkAlias('목백일홍', '배롱나무', LIST).ok).toBe(true);
@@ -35,20 +39,31 @@ describe('checkAlias — 자동 별칭 거절 규칙(순수)', () => {
     }
   });
 
-  it('원예 일반 표현은 거절 — 사전이 아니라 문장이다', () => {
-    for (const w of ['나무', '묘목', '전정', '화분', '가을']) {
-      expect(checkAlias(w, '배롱나무', LIST).ok, `${w} 가 통과했다`).toBe(false);
+  it('업종 일반 표현은 거절 — 사전이 아니라 문장이다', () => {
+    // 업종 낱말은 브랜드가 준다 — 원예 브랜드가 줄 목록을 명시해 기제 자체를 고정한다.
+    for (const w of ['나무', '묘목', '전정', '화분']) {
+      expect(checkAlias(w, '배롱나무', LIST, HORT_STOPWORDS).ok, `${w} 가 통과했다`).toBe(false);
     }
-    expect(ALIAS_STOPWORDS).toContain('묘목');
+    expect(ALIAS_STOPWORDS).toBe(SUBJECT_STOPWORDS_BASE);
   });
 
-  it('다른 수종 이름에 포함되면 거절 — 그 수종 문장을 가로챈다', () => {
+  it('불용어는 넘긴 목록이 결정한다 — 브랜드 설정이 그대로 적용된다', () => {
+    // 목록에 없으면 통과, 목록에 넣으면 거절 — 같은 낱말로 두 방향을 확인한다.
+    expect(checkAlias('전정', '배롱나무', LIST, []).ok).toBe(true);
+    const v = checkAlias('전정', '배롱나무', LIST, HORT_STOPWORDS);
+    expect(v.ok).toBe(false);
+    expect(v.reason).toBe('업종 일반 표현');
+    // 미지정이면 브랜드 접근자(subjectStopwords) — 업종 중립 기본어는 어느 브랜드에서도 거절된다.
+    for (const w of SUBJECT_STOPWORDS_BASE) expect(checkAlias(w, '배롱나무', LIST).ok, `${w} 가 통과했다`).toBe(false);
+  });
+
+  it('다른 소재 이름에 포함되면 거절 — 그 소재 문장을 가로챈다', () => {
     // '나무'는 배롱나무·밤나무·참나무 안에 다 들어 있다
     const v = checkAlias('나무', '수국', LIST);
     expect(v.ok).toBe(false);
   });
 
-  it('다른 수종 이름을 품으면 거절 — 긴 이름이 이겨서 그쪽을 끌어간다', () => {
+  it('다른 소재 이름을 품으면 거절 — 긴 이름이 이겨서 그쪽을 끌어간다', () => {
     // findSpecies 는 긴 키 우선이다. '수국묘목'을 배롱나무 별칭으로 넣으면
     // "수국묘목 심기"가 배롱나무가 된다.
     const v = checkAlias('수국묘목', '배롱나무', LIST);
@@ -56,7 +71,7 @@ describe('checkAlias — 자동 별칭 거절 규칙(순수)', () => {
     expect(v.reason).toContain('수국');
   });
 
-  it('대상 수종이 이미 가진 이름과의 포함 관계는 문제가 아니다 — 같은 나무다', () => {
+  it('대상 소재가 이미 가진 이름과의 포함 관계는 문제가 아니다 — 같은 소재다', () => {
     // '백일홍'은 대상(배롱나무)의 기존 별칭 '백일홍나무'에 포함된다. 그래도 통과해야 한다.
     expect(checkAlias('백일홍', '배롱나무', LIST).ok).toBe(true);
   });
@@ -66,7 +81,7 @@ describe('checkAlias — 자동 별칭 거절 규칙(순수)', () => {
     expect(checkAlias('배롱나무', '배롱나무', LIST).reason).toBe('표준명과 같음');
   });
 
-  it('사전에 없는 수종에는 못 붙인다 — LLM 이 지어낸 표준명 방어', () => {
+  it('사전에 없는 소재에는 못 붙인다 — LLM 이 지어낸 표준명 방어', () => {
     expect(checkAlias('무엇', '없는나무', LIST).ok).toBe(false);
   });
 
@@ -77,7 +92,7 @@ describe('checkAlias — 자동 별칭 거절 규칙(순수)', () => {
 });
 
 describe('readVerdict — LLM 응답 좁히기(순수)', () => {
-  it('사전에 있는 수종을 지목한 alias 만 받는다', () => {
+  it('사전에 있는 소재를 지목한 alias 만 받는다', () => {
     expect(readVerdict({ kind: 'alias', of: '배롱나무' }, LIST)).toEqual({ kind: 'alias', of: '배롱나무' });
   });
   it('사전에 없는 표준명을 지목하면 unknown — 지어낸 이름에 별칭을 붙이면 안 된다', () => {
@@ -161,7 +176,7 @@ describe('appendSpeciesAlias — 기존 블록 안을 고친다', () => {
     });
   });
 
-  it('다른 수종 블록을 건드리지 않는다', () => {
+  it('다른 소재 블록을 건드리지 않는다', () => {
     withFile(YAML, (f) => {
       appendSpeciesAlias('배롱나무', '백일홍', f);
       const list = loadSpecies(f);
@@ -177,7 +192,7 @@ describe('appendSpeciesAlias — 기존 블록 안을 고친다', () => {
     });
   });
 
-  it('없는 수종·빈 값은 false — 파일을 건드리지 않는다', () => {
+  it('없는 소재·빈 값은 false — 파일을 건드리지 않는다', () => {
     withFile(YAML, (f) => {
       const before = fs.readFileSync(f, 'utf-8');
       expect(appendSpeciesAlias('없는나무', '무엇', f)).toBe(false);
@@ -236,7 +251,7 @@ describe('실제 사전으로 — 이 사건이 다시 나면 막힌다', () => 
     // 거절해야 하는 것 — 사전을 오염시킬 이름
     expect(checkAlias('배', '배나무', real).ok).toBe(false);
     expect(checkAlias('밤', '밤나무', real).ok).toBe(false);
-    expect(checkAlias('묘목', '배나무', real).ok).toBe(false);
+    expect(checkAlias('묘목', '배나무', real, HORT_STOPWORDS).ok).toBe(false);
   });
 });
 
@@ -262,7 +277,7 @@ describe('learnSpeciesLabel — 세 갈래 처리(주입 의존)', () => {
     expect(asked).toBe(0);
   });
 
-  it('별칭으로 판정되면 그 수종에 붙인다 — 이 사건의 경로', async () => {
+  it('별칭으로 판정되면 그 소재에 붙인다 — 이 사건의 경로', async () => {
     const { deps, calls } = base({ ask: async () => ({ kind: 'alias', of: '배롱나무' }) });
     const msg = await learnSpeciesLabel('백일홍', deps);
     expect(calls.alias).toEqual([['배롱나무', '백일홍']]);

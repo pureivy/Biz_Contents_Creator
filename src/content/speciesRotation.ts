@@ -4,6 +4,8 @@
  * 2026-08-27 사용자: "배롱나무는 너무 많이 다뤘어. 나무 종류가 많을 텐데 왜 이래" — 실측 블로그 91편 중
  * 배롱 8·블루베리 7·포도 5, 씨앗 키워드 21개가 10종 안팎이라 두뇌가 그 안에서만 돌았다.
  */
+import { subjectGenericTerms } from './brand';
+
 export interface SpeciesEntry { name: string; aliases?: string[] }
 export interface SpeciesGroup { group: string; species: SpeciesEntry[] }
 
@@ -89,10 +91,14 @@ export function overSpeciesCap(
   return n >= capOf(cap, sp) ? { name: sp, count: n } : null;
 }
 
-/** 프롬프트 블록 — 상한 도달(제안 금지) · 최근 다룸(피함) · 아직 안 다룬 수종(우선, 분류별). */
+/**
+ * 프롬프트 블록 — 상한 도달(제안 금지) · 최근 다룸(피함) · 아직 안 다룬 소재(우선, 분류별).
+ * genericTerms 미지정이면 브랜드 총칭어(subjectGenericTerms) — 비면 총칭 제한 문장을 생략한다.
+ */
 export function speciesRotationBlock(
   catalog: SpeciesGroup[] | undefined, coverage: Map<string, number>,
   cap: number | ((name: string) => number) = SPECIES_MONTHLY_CAP, minFresh = 5,
+  genericTerms: readonly string[] = subjectGenericTerms(),
 ): string {
   if (!catalog?.length) return '';
   const capped: string[] = []; const recent: string[] = []; const freshGroups: string[] = [];
@@ -106,10 +112,11 @@ export function speciesRotationBlock(
     }
     if (fresh.length) freshGroups.push(`  · ${g.group}: ${fresh.join(', ')}`);
   }
-  const lines = [`[수종 로테이션 — 최근 ${SPECIES_WINDOW_DAYS}일 블로그 기준, 수종당 상한 ${cap}편]`];
+  const lines = [`[소재 로테이션 — 최근 ${SPECIES_WINDOW_DAYS}일 블로그 기준, 소재당 상한 ${cap}편]`];
   if (capped.length) lines.push(`- 상한 도달 → 제안 금지(코드가 기각한다): ${capped.join(', ')}`);
   if (recent.length) lines.push(`- 최근 다룸 → 가급적 피함: ${recent.join(', ')}`);
-  if (freshGroups.length) lines.push(`- 아직 안 다룬 수종 → 우선(후보 중 최소 ${minFresh}개는 여기서):`, ...freshGroups);
-  lines.push('- 수종은 카탈로그 정식명 그대로 쓰고, 한 후보에 수종 하나만. 총칭(나무·묘목·유실수·조경수)만으로 된 주제는 최대 1개.');
+  if (freshGroups.length) lines.push(`- 아직 안 다룬 소재 → 우선(후보 중 최소 ${minFresh}개는 여기서):`, ...freshGroups);
+  lines.push('- 소재는 카탈로그 정식명 그대로 쓰고, 한 후보에 소재 하나만.'
+    + (genericTerms.length ? ` 총칭(${genericTerms.join('·')})만으로 된 주제는 최대 1개.` : ''));
   return lines.join('\n');
 }

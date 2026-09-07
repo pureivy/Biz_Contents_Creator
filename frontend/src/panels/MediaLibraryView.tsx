@@ -4,8 +4,8 @@ import Ico from "./Ico";
 /**
  * 사진·영상 보관소 — 한 번 올려 두고 여러 콘텐츠가 꺼내 쓴다.
  *
- * 컴포저 첨부는 '이 런에만' 쓰인다. 그래서 같은 수국 사진을 수국 편마다 다시 올려야 했다.
- * 여기에 소재 이름(수종·품종·제품 등, 소재 사전의 키)을 붙여 두면, 그 소재 콘텐츠가 만들어질 때 자동으로 화면에 들어간다.
+ * 컴포저 첨부는 '이 런에만' 쓰인다. 그래서 같은 소재 사진을 소재 편마다 다시 올려야 했다.
+ * 여기에 소재 이름(품종·제품·메뉴 등, 소재 사전의 키)을 붙여 두면, 그 소재 콘텐츠가 만들어질 때 자동으로 화면에 들어간다.
  */
 interface MediaItem {
   id: string; kind: "image" | "video"; name: string; bytes: number;
@@ -65,10 +65,10 @@ export default function MediaLibraryView() {
       <div className="media-head">
         <div>
           <h2>사진·영상 보관소</h2>
-          <p>올릴 때 소재 이름(수종·품종·제품 등)을 붙여 두면, 그 소재의 콘텐츠를 만들 때 자동으로 화면에 들어갑니다. 비우면 어떤 주제에나 쓰이는 범용 소재가 되고, 처음 보는 이름은 소재 사전이 배웁니다.</p>
+          <p>올릴 때 소재 이름(품종·제품·메뉴 등)을 붙여 두면, 그 소재의 콘텐츠를 만들 때 자동으로 화면에 들어갑니다. 비우면 어떤 주제에나 쓰이는 범용 소재가 되고, 처음 보는 이름은 소재 사전이 배웁니다.</p>
         </div>
         <div className="media-upload">
-          <input value={species} onChange={(e) => setSpecies(e.target.value)} placeholder="소재 이름 (예: 수국)" />
+          <input value={species} onChange={(e) => setSpecies(e.target.value)} placeholder="소재 이름 (품종·제품명)" />
           <input value={tags} onChange={(e) => setTags(e.target.value)} placeholder="태그 쉼표로 (가을, 열매)" />
           <button type="button" disabled={busy} onClick={() => fileRef.current?.click()}>
             <Ico name="plus" size={12} /> {busy ? "올리는 중…" : "사진·영상 올리기"}

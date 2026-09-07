@@ -4,6 +4,7 @@ import os from 'node:os';
 import path from 'node:path';
 import { applyShortsRevision, trimPlanToBudget, pruneQuoteSources, restoreLostHedges, HEDGE_RE, timingFields, pickTitleTypes, TITLE_TYPE_POOL, shortsTitleTypeGuide, descriptionLintIssues, buildSceneImagePrompt, diversifyTitle, titleShape, normalizeLatinName } from './shorts';
 import { ShortsStore } from '../content/shorts';
+import { subjectTraits } from '../content/brand';
 
 type ShortsPlan = Parameters<typeof applyShortsRevision>[0];
 
@@ -352,23 +353,23 @@ describe('diversifyTitle — 대표 제목 구조 수렴 차단', () => {
   });
 });
 
-describe('buildSceneImagePrompt — 수종 앵커', () => {
+describe('buildSceneImagePrompt — 소재 앵커', () => {
   const base = { style: '플랫 디자인', scene: '담장 위 작은 나무들', index: 2, total: 4 };
   const SUBJ = '측백나무 — 비늘 모양 잎의 침엽수, 원뿔형 수형';
 
   it('subject 를 주면 씬 묘사보다 먼저 종을 못박는다', () => {
     const t = buildSceneImagePrompt({ ...base, subject: SUBJ });
-    expect(t).toContain('[대상 식물');
+    expect(t).toContain('[대상 소재');
     expect(t).toContain('측백나무');
-    expect(t.indexOf('[대상 식물')).toBeLessThan(t.indexOf('장면(씬'));
+    expect(t.indexOf('[대상 소재')).toBeLessThan(t.indexOf('장면(씬'));
   });
   it('시드 유무와 무관하게 항상 걸린다 — 수종 정확성은 연출 변주와 별개다', () => {
     for (const seed of [undefined, 'short_a']) {
-      expect(buildSceneImagePrompt({ ...base, seed, subject: SUBJ })).toContain('[대상 식물');
+      expect(buildSceneImagePrompt({ ...base, seed, subject: SUBJ })).toContain('[대상 소재');
     }
   });
   it('subject 가 없으면 앵커 줄이 안 붙는다(종전 동작)', () => {
-    expect(buildSceneImagePrompt(base)).not.toContain('[대상 식물');
+    expect(buildSceneImagePrompt(base)).not.toContain('[대상 소재');
   });
   it('실사고 재현 — 씬 묘사가 "작은 나무들"뿐이어도 종이 프롬프트에 남는다', () => {
     // short_5b5f7f4231: 4씬 중 1씬만 수종명을 적었고 나머지는 "생울타리"·"작은 나무 아이콘들"
@@ -404,17 +405,19 @@ describe('buildSceneImagePrompt — 학명 앵커', () => {
     expect(t.indexOf('Nandina')).toBeLessThan(t.indexOf('장면(씬'));
   });
   it('학명만 있어도 앵커가 붙는다', () => {
-    expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Nandina domestica' })).toContain('[대상 식물');
+    expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Nandina domestica' })).toContain('[대상 소재');
   });
   it('둘 다 없으면 앵커 줄이 없다', () => {
-    expect(buildSceneImagePrompt(base)).not.toContain('[대상 식물');
+    expect(buildSceneImagePrompt(base)).not.toContain('[대상 소재');
   });
-  it('잎차례까지 지시한다 — 남천을 손바닥잎으로 그린 실사고 대응', () => {
-    expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Nandina domestica' })).toContain('잎차례');
+  // 특징 축은 브랜드가 준다(2026-09-07 범용화) — 원예 브랜드면 '잎 모양·잎차례·수형·계절 색',
+  // 미설정이면 업종 중립 기본. 앵커 줄이 그 축을 그대로 지시하는지만 본다.
+  it('특징 축까지 지시한다 — 남천을 손바닥잎으로 그린 실사고 대응', () => {
+    expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Nandina domestica' })).toContain(subjectTraits());
   });
 });
 
-describe('buildSceneImagePrompt — 종 레퍼런스·연장 금지(2026-09-06)', () => {
+describe('buildSceneImagePrompt — 종 레퍼런스·도구 금지(2026-09-06)', () => {
   const base = { style: '자연광', scene: '줄기 구조', index: 1, total: 4, seed: 's1' };
   it('레퍼런스가 붙으면 팔레트가 아니라 실물이라고 못박는다', () => {
     // 실측: 앵커에 "잎맥 세 개"·"지그재그 수형"을 다 적어도 종이 틀렸다. 실물 프레임 한 장이
@@ -427,12 +430,12 @@ describe('buildSceneImagePrompt — 종 레퍼런스·연장 금지(2026-09-06)'
   it('레퍼런스가 없으면 그 줄은 안 나온다', () => {
     expect(buildSceneImagePrompt({ ...base, subjectLatin: 'Ziziphus jujuba' })).not.toContain('이 종의 실물');
   });
-  it('연장은 언제나 금지 — 전지가위 날·축이 물리적으로 불가능하게 그려졌다', () => {
+  it('도구는 언제나 금지 — 가위 날·축이 물리적으로 불가능하게 그려졌다', () => {
     const p = buildSceneImagePrompt(base);
-    expect(p).toContain('[연장]');
-    expect(p).toContain('전지가위');
+    expect(p).toContain('[도구]');
+    expect(p).toContain('가위·톱·삽');
   });
-  it('생활감이 도구를 부르지 않는다 — 연장 금지와 모순되면 안 된다', () => {
+  it('생활감이 도구를 부르지 않는다 — 도구 금지와 모순되면 안 된다', () => {
     for (let i = 0; i < 12; i++) {
       const p = buildSceneImagePrompt({ ...base, index: i, total: 12, seed: `seed${i}` });
       const line = p.split('\n').find((l) => l.startsWith('생활감:')) ?? '';

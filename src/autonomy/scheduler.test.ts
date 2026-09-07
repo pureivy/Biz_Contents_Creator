@@ -1,4 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { subjectAnchorTest } from '../content/brand';
 import { startAutoCycle, startDaily, derivedContentDue, seedKeywordBlock, eligibleWinners, dailyDue, lacksSpeciesAnchor, normalizeIdeaCandidates, demandGateDecision, pickDemoted, pickRoundAdoption, shouldRememberDemandReject } from './scheduler';
 import type { DemandRow } from '../analytics/topicDemand';
 
@@ -336,20 +337,33 @@ describe('runNow force — 수동 즉시 생산 플래그', () => {
   });
 });
 
-describe('lacksSpeciesAnchor — 이름·꽃말·유래 축 수종 앵커 게이트(순수)', () => {
-  it('수종 앵커(○○나무)가 있으면 통과', () => {
-    expect(lacksSpeciesAnchor('회화나무 꽃말과 선비 이야기')).toBe(false);
-    expect(lacksSpeciesAnchor('은행나무 이름 유래')).toBe(false);
-    expect(lacksSpeciesAnchor('단풍나무 꽃말')).toBe(false);
+describe('lacksSpeciesAnchor — 이름·꽃말·유래 축 소재 앵커 게이트(순수)', () => {
+  // 앵커 판정기는 브랜드가 준다(정규식 또는 카탈로그 이름). 테스트는 종전 원예 브랜드의 정규식을 명시로 넘긴다.
+  const anchored = (t: string): boolean => /[가-힣]{1,6}나무/.test(t);
+  it('소재 앵커(○○나무)가 있으면 통과', () => {
+    expect(lacksSpeciesAnchor('회화나무 꽃말과 선비 이야기', anchored)).toBe(false);
+    expect(lacksSpeciesAnchor('은행나무 이름 유래', anchored)).toBe(false);
+    expect(lacksSpeciesAnchor('단풍나무 꽃말', anchored)).toBe(false);
   });
-  it('총칭·화초 꽃말은 기각(실측: 나무 이름 유래 총칭 검색 0, 화초 미끄러짐은 소재 게이트가 못 막음)', () => {
-    expect(lacksSpeciesAnchor('나무 이름 유래 모음')).toBe(true);   // 총칭 — '나무' 단독은 앵커 아님
-    expect(lacksSpeciesAnchor('장미 꽃말과 전설')).toBe(true);       // 화초 미끄러짐
-    expect(lacksSpeciesAnchor('가을꽃 꽃말 알아보기')).toBe(true);
+  it('총칭·범위 밖 소재의 꽃말은 기각(실측: 나무 이름 유래 총칭 검색 0, 미끄러짐은 소재 범위 게이트가 못 막음)', () => {
+    expect(lacksSpeciesAnchor('나무 이름 유래 모음', anchored)).toBe(true);   // 총칭 — '나무' 단독은 앵커 아님
+    expect(lacksSpeciesAnchor('장미 꽃말과 전설', anchored)).toBe(true);       // 범위 밖 소재로 미끄러짐
+    expect(lacksSpeciesAnchor('가을꽃 꽃말 알아보기', anchored)).toBe(true);
   });
   it('유래·꽃말 주제가 아니면 무관(수사적 상징 포함)', () => {
-    expect(lacksSpeciesAnchor('가을 정원의 상징, 단풍 감상법')).toBe(false);
-    expect(lacksSpeciesAnchor('묘목 고르는 법')).toBe(false);
+    expect(lacksSpeciesAnchor('가을 정원의 상징, 단풍 감상법', anchored)).toBe(false);
+    expect(lacksSpeciesAnchor('묘목 고르는 법', anchored)).toBe(false);
+  });
+  it('판정기가 없으면(브랜드 미설정) 기각하지 않는다 — 근거 없는 게이트는 통과', () => {
+    expect(lacksSpeciesAnchor('장미 꽃말과 전설', null)).toBe(false);
+    expect(lacksSpeciesAnchor('나무 이름 유래 모음', subjectAnchorTest(null))).toBe(false);   // 미설정 브랜드 = null 판정기
+  });
+  it('카탈로그 이름 판정기도 같은 게이트로 동작한다(정규식 대신 이름 목록)', () => {
+    const byCatalog = subjectAnchorTest({
+      name: 'T', products: [], speciesCatalog: [{ group: '기본', species: [{ name: '올리브' }, { name: '블루베리' }] }],
+    });
+    expect(lacksSpeciesAnchor('올리브 이름 유래', byCatalog)).toBe(false);
+    expect(lacksSpeciesAnchor('장미 꽃말과 전설', byCatalog)).toBe(true);
   });
 });
 

@@ -2,9 +2,9 @@
  * 계열 원장 v2(2026-08-25 사용자 승인 "풀 설계") — 편중 쿨다운의 본체.
  *
  * v1(정규식·수동 사전 집계)의 한계 4가지를 교체한다:
- *  ① 수동 차원(새 편중마다 코드 수정) → micro 배치 분류로 {수종, 행위} 라벨을 원장에 적재(결정적 폴백 동반).
+ *  ① 수동 차원(새 편중마다 코드 수정) → micro 배치 분류로 {소재, 행위} 라벨을 원장에 적재(결정적 폴백 동반).
  *  ② 이분법 강도 → 지수 감쇠 점수(반감기 3.5일, 절벽 해제 없음) + 소프트/하드 2단계.
- *  ③ 거친 해상도 → 수종×행위 '조합'은 엄격(최근 2편급), 수종·행위 '단독'은 느슨(최근 3편급) —
+ *  ③ 거친 해상도 → 소재×행위 '조합'은 엄격(최근 2편급), 소재·행위 '단독'은 느슨(최근 3편급) —
  *     "포도×전정은 막되 포도×월동은 소프트만"이 된다.
  *  ④ 기각만 있고 유도 없음 → 소프트는 기각이 아니라 프롬프트 회피+트렌드·기회 신호 제외로만 작용.
  *
@@ -14,9 +14,9 @@
 import fs from 'node:fs';
 import path from 'node:path';
 import { CONFIG } from '../config';
-import { activeBrandSlug, brandFileSuffixFor } from '../content/brand';
+import { activeBrandSlug, brandFileSuffixFor, industryLabel, subjectGenericTerms } from '../content/brand';
 import { pieceStore } from '../content/pieces';
-import { fallbackSeriesLabels, ACTIVITY_AXES } from '../content/seriesCooldown';
+import { fallbackSeriesLabels, activityAxes } from '../content/seriesCooldown';
 import { microJSON } from '../orchestrator/agent';
 import { resolveAssignment } from '../llm/setting';
 
@@ -27,7 +27,7 @@ export interface SeriesScores {
   /** 7일 창 단순 횟수(감쇠 무관) — 리뷰 확정 회귀 대응: 격일 케이던스에선 감쇠 합이 하드 임계에
    *  영원히 못 미친다(점근합 2.06<2.4). v1 의미론의 결정적 바닥선용. */
   n7species: Map<string, number>; n7activity: Map<string, number>; n7combo: Map<string, number>;
-  /** 3일 내 같은 수종 편수(2026-08-27). */
+  /** 3일 내 같은 소재 편수(2026-08-27). */
   n3species: Map<string, number>;
 }
 export type SeriesGate = { level: 'hard' | 'soft' | 'none'; key?: string; why?: string };
@@ -37,38 +37,43 @@ const TAU_DAYS = 3.5 / Math.LN2;
 const HORIZON_DAYS = 21;          // 이보다 오래된 편은 계산에서 제외(0.016 이하라 무의미)
 /** 감쇠 임계 — 소프트 ≈ 최근 1.5편, 하드는 '최신 편 0일령 기준' 조합 이틀 2편 · 단독 사흘 3편.
  *  격일 간격에선 감쇠 합이 임계에 못 미치므로(리뷰 실측) 아래 N7 바닥선이 결정적 백스톱을 이룬다:
- *  7일 내 같은 조합 2편+ 또는 같은 수종/행위 3편+ 이면 점수와 무관하게 하드(창설 사고 4편/6일을 4편째 차단). */
+ *  7일 내 같은 조합 2편+ 또는 같은 소재/행위 3편+ 이면 점수와 무관하게 하드(창설 사고 4편/6일을 4편째 차단). */
 export const SERIES_SOFT = 1.2;
 export const SERIES_HARD_COMBO = 1.6;
 export const SERIES_HARD_SINGLE = 2.4;
 export const SERIES_N7_COMBO = 2;
 export const SERIES_N7_SINGLE = 3;
-/** 같은 수종 3일 내 1편+ 이면 하드(2026-08-27 사용자: "며칠 전에 올리브 글을 썼는데" — 3일 만의 같은 수종 재등장 차단). */
+/** 같은 소재 3일 내 1편+ 이면 하드(2026-08-27 사용자: "며칠 전에 올리브 글을 썼는데" — 3일 만의 같은 소재 재등장 차단). */
 export const SERIES_N3_DAYS = 3;
 export const SERIES_N3_SPECIES = 1;
 const N7_DAYS = 7;
 const MAX_LEDGER = 300;
 
 /** 계열이 될 수 없는 총칭·범주어(리뷰 지적) — LLM 오라벨이 원장·후보 양쪽에 상관 편향으로 실리면
- *  브랜드 핵심 소재('묘목' 등)가 체계적으로 눌린다. 프롬프트 지시의 코드 백스톱. */
-const NON_SERIES = new Set(['묘목', '유실수', '조경수', '정원수', '과실수', '과실나무', '유실수묘목', '나무', '식물', '수목']);
+ *  브랜드 핵심 소재가 체계적으로 눌린다. 프롬프트 지시의 코드 백스톱. 낱말은 브랜드 총칭어 설정이 준다
+ *  (미설정=빈 집합 → 총칭 배제 없음). */
+const nonSeries = (generic: string[] = subjectGenericTerms()): Set<string> => new Set(generic);
 const NON_ACTIVITY = new Set(['관리', '재배', '키우기', '가꾸기', '기르기']);
 
-const normSpecies = (s: unknown): string | null => {
+/** 소재 이름 정규화(순수, 테스트 대상) — 총칭 접미를 떼어 키 공간을 하나로 모은다.
+ *  generic: 브랜드 총칭어(예: 나무·묘목). 긴 낱말부터 대조하고, 떼고 남는 어간이 2자 미만이면 원형을 지킨다
+ *  (단음절 어간 소재는 스트립하면 키가 소멸한다 — 리뷰 확정 메이저). */
+export const normSpecies = (s: unknown, generic: string[] = subjectGenericTerms()): string | null => {
   const raw = String((s as string | number | null | undefined) ?? '').trim().normalize('NFC').replace(/\s+/g, '');
   if (!raw || raw === 'null') return null;
-  const stem = raw.replace(/나무$/, '');
-  // 단음절 어간 수종(감나무·배나무·소나무 등)은 스트립하면 키가 소멸한다(리뷰 확정 메이저) — 원형 유지.
-  // LLM 이 '감'처럼 1자 순수형을 내면 '감나무'로 승격해 키 공간을 통일한다.
-  const key = stem.length >= 2 ? stem : (raw.length >= 2 ? raw : `${raw}나무`);
-  if (NON_SERIES.has(key) || NON_SERIES.has(raw)) return null;
+  let key = raw;
+  for (const g of [...generic].sort((a, b) => b.length - a.length)) {
+    if (raw.length - g.length >= 2 && raw.endsWith(g)) { key = raw.slice(0, raw.length - g.length); break; }
+  }
+  const bad = nonSeries(generic);
+  if (bad.has(key) || bad.has(raw)) return null;
   return key.length >= 2 && key.length <= 12 ? key : null;
 };
 const normActivity = (s: unknown): string | null => {
   const t = String((s as string | number | null | undefined) ?? '').trim().normalize('NFC').replace(/\s+/g, '');
   if (t.length < 2 || t.length > 10 || t === 'null' || NON_ACTIVITY.has(t)) return null;
   // 동의어를 표준형(terms[0])으로 접기 — LLM·폴백·수동 표기가 같은 키 공간을 쓰게.
-  for (const a of ACTIVITY_AXES) if (a.terms.some((term) => t === term.replace(/\s+/g, ''))) return a.terms[0]!;
+  for (const a of activityAxes()) if (a.terms.some((term) => t === term.replace(/\s+/g, ''))) return a.terms[0]!;
   return t;
 };
 
@@ -91,7 +96,7 @@ function writeLedger(labels: SeriesLabel[], slug?: string): void {
   fs.renameSync(`${f}.tmp`, f);
 }
 
-/** 점수 계산(순수, 테스트 대상) — 라벨별 Σ exp(-경과일/τ). 조합 키는 "수종×행위". */
+/** 점수 계산(순수, 테스트 대상) — 라벨별 Σ exp(-경과일/τ). 조합 키는 "소재×행위". */
 export function computeSeriesScores(entries: SeriesEntry[], now = Date.now()): SeriesScores {
   const s: SeriesScores = {
     species: new Map(), activity: new Map(), combo: new Map(),
@@ -128,11 +133,11 @@ export function gateForLabels(l: { species: string | null; activity: string | nu
     return { level: 'hard', key: comboKey, why: cbN >= SERIES_N7_COMBO ? `조합 7일 ${cbN}편` : `조합 ${cb.toFixed(1)}` };
   }
   if (l.species && (sp >= SERIES_HARD_SINGLE || spN >= SERIES_N7_SINGLE)) {
-    return { level: 'hard', key: l.species, why: spN >= SERIES_N7_SINGLE ? `수종 7일 ${spN}편` : `수종 ${sp.toFixed(1)}` };
+    return { level: 'hard', key: l.species, why: spN >= SERIES_N7_SINGLE ? `소재 7일 ${spN}편` : `소재 ${sp.toFixed(1)}` };
   }
-  // 3일 바닥선(2026-08-27) — 감쇠 합·7일 3편에 못 미쳐도 같은 수종이 3일 안에 1편이라도 있으면 하드.
+  // 3일 바닥선(2026-08-27) — 감쇠 합·7일 3편에 못 미쳐도 같은 소재가 3일 안에 1편이라도 있으면 하드.
   if (l.species && sp3 >= SERIES_N3_SPECIES) {
-    return { level: 'hard', key: l.species, why: `수종 3일 ${sp3}편` };
+    return { level: 'hard', key: l.species, why: `소재 3일 ${sp3}편` };
   }
   if (l.activity && (ac >= SERIES_HARD_SINGLE || acN >= SERIES_N7_SINGLE)) {
     return { level: 'hard', key: l.activity, why: acN >= SERIES_N7_SINGLE ? `행위 7일 ${acN}편` : `행위 ${ac.toFixed(1)}` };
@@ -207,7 +212,7 @@ export function cooldownSummary(slug?: string): { hard: string[]; soft: string[]
     const tokens = new Set<string>(); const hardTokens = new Set<string>();
     const expand = (set: Set<string>, key: string, kind: 'species' | 'activity'): void => {
       set.add(key);
-      if (kind === 'activity') for (const a of ACTIVITY_AXES) if (a.terms[0] === key) a.terms.forEach((t) => set.add(t));
+      if (kind === 'activity') for (const a of activityAxes()) if (a.terms[0] === key) a.terms.forEach((t) => set.add(t));
     };
     const push = (key: string, score: number, n7: number, kind: 'species' | 'activity' | 'combo'): void => {
       const isHard = kind === 'combo'
@@ -227,12 +232,14 @@ export function cooldownSummary(slug?: string): { hard: string[]; soft: string[]
   } catch { return { hard: [], soft: [], excludeTokens: [], excludeTokensHard: [] }; }
 }
 
-const CLASSIFY_SYSTEM =
-  '너는 원예 콘텐츠 사서다. 각 글 제목·키워드를 두 축으로 분류한다. ' +
-  "species: 특정 식물·수종의 고유명을 '한 단어'로(예: 포도, 배롱, 블루베리, 올리브, 감나무 — '나무' 접미는 어간이 두 글자 이상이면 떼라: 배롱나무→배롱, 감나무는 그대로). " +
-  '유실수·조경수·묘목·나무 같은 총칭·범주는 null. ' +
-  "activity: 글의 행위·주제 축을 표준 한 단어로(예: 전정, 식재, 물주기, 월동, 병충해, 시비, 고르기, 구별, 수확, 배치, 꽃눈) — " +
-  "'관리'처럼 무의미하게 넓은 말은 피하고 더 구체 축을 골라라. 정말 없으면 null. 요청된 JSON 스키마만 출력한다.";
+/** 계열 분류 프롬프트(호출 시점 조립) — 업종 표기·총칭어는 브랜드 설정에서 온다. */
+function classifySystem(generic: string[] = subjectGenericTerms()): string {
+  return `너는 ${industryLabel()} 콘텐츠 사서다. 각 글 제목·키워드를 두 축으로 분류한다. `
+    + "species: 특정 소재(품종·제품·모델)의 고유명을 '한 단어'로(예: 포도, 배롱, 블루베리 — 총칭 접미('나무' 등)는 어간이 두 글자 이상이면 떼라: 배롱나무→배롱, 감나무는 그대로). "
+    + `${generic.length ? generic.join('·') : '총칭·범주어'} 같은 총칭·범주는 null. `
+    + 'activity: 글의 행위·주제 축을 표준 한 단어로(예: 전정, 식재, 물주기, 월동, 병충해, 시비, 고르기, 구별, 수확, 배치, 꽃눈) — '
+    + "'관리'처럼 무의미하게 넓은 말은 피하고 더 구체 축을 골라라. 정말 없으면 null. 요청된 JSON 스키마만 출력한다.";
+}
 
 /** 미분류 편 배치 분류 — 기획 직전·일일 틱에서 호출(대개 no-op 또는 micro 1콜). fail-open. */
 export async function ensureSeriesLabels(slug?: string, signal?: AbortSignal): Promise<number> {
@@ -247,7 +254,7 @@ export async function ensureSeriesLabels(slug?: string, signal?: AbortSignal): P
       .slice(-20);
     if (!missing.length) return 0;
     const o = await microJSON<{ labels?: Array<{ id?: unknown; species?: unknown; activity?: unknown } | null> }>(
-      resolveAssignment().micro, CLASSIFY_SYSTEM,
+      resolveAssignment().micro, classifySystem(),
       `[글 목록]\n${missing.map((p) => `- id=${p.id} | ${p.title}${p.keyword ? ` (키워드: ${p.keyword})` : ''}`).join('\n')}\n\n` +
       '형식: {"labels":[{"id":"piece_...","species":"...|null","activity":"...|null"}]} — 전 항목 포함.',
       { maxOutputTokens: 700, signal },
@@ -287,7 +294,7 @@ export async function classifyCandidates(
   try {
     if (!cands.length) return [];
     const o = await microJSON<{ labels?: Array<{ id?: unknown; species?: unknown; activity?: unknown } | null> }>(
-      resolveAssignment().micro, CLASSIFY_SYSTEM,
+      resolveAssignment().micro, classifySystem(),
       `[글 목록]\n${cands.map((c, i) => `- id=${i} | ${c.title}${c.keyword ? ` (키워드: ${c.keyword})` : ''}`).join('\n')}\n\n` +
       '형식: {"labels":[{"id":"0","species":"...|null","activity":"...|null"}]} — 전 항목 포함.',
       { maxOutputTokens: 500, signal },

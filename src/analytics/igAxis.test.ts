@@ -1,5 +1,19 @@
 import { describe, it, expect } from 'vitest';
-import { classifyAxis, axisPerformance, axisBlock, isContainerTopic, AXIS_NONE, IG_AXES } from './igAxis';
+import { classifyAxis as classifyIn, axisPerformance as perfIn, axisBlock, isContainerTopic as containerIn, igAxes, AXIS_NONE } from './igAxis';
+
+// 원예 브랜드가 brand.yaml activityAxes 에 넣을 값 — 종전 코드에 박혀 있던 6축(범용화 2026-09-07).
+const HORT = igAxes([
+  { terms: ['전정·가지치기', '전정', '가지치기', '자르', '잘라', '솎', '삽목', '접목'] },
+  { terms: ['꽃·개화', '꽃', '개화', '봉오리', '화단'] },
+  { terms: ['열매·수확', '열매', '수확', '과실', '당도', '익는'] },
+  { terms: ['화분·실내', '화분', '베란다', '실내', '분갈이'] },
+  { terms: ['심기·자리', '심기', '식재', '이식', '자리', '생울타리', '묘목'] },
+  { terms: ['관리·병해', '물주기', '거름', '비료', '병해', '해충', '월동', '보호'] },
+]);
+const IG_AXES = HORT;
+const classifyAxis = (text: string) => classifyIn(text, HORT);
+const axisPerformance = (rows: ReadonlyArray<{ text: string; views: number }>, minCount?: number) => perfIn(rows, minCount, HORT);
+const isContainerTopic = (text: string) => containerIn(text, HORT);
 
 describe('classifyAxis — 소재 축 판별(순수)', () => {
   it('표현으로 축을 잡는다', () => {
@@ -96,5 +110,17 @@ describe('isContainerTopic — 컨테이너 소품 게이트(순수)', () => {
     for (const t of ['화분 물주기', '분갈이 시기', '노지 월동']) {
       expect(isContainerTopic(t)).toBe(axisTest.test(t));
     }
+  });
+});
+
+describe('igAxes — 브랜드 행위 축에서 만든다(범용 기본은 축 없음)', () => {
+  it('설정이 없으면 축이 없고 전부 기타', () => {
+    expect(igAxes([])).toEqual([]);
+    expect(classifyIn('배롱나무 전정', [])).toBe(AXIS_NONE);
+    expect(containerIn('화분 분갈이', [])).toBe(false);
+  });
+  it('terms[0] 이 축 이름, 나머지가 판별 표현 — 특수문자도 문자로', () => {
+    const ax = igAxes([{ terms: ['C++ 강좌', 'C++', '씨플플'] }]);
+    expect(classifyIn('C++ 입문', ax)).toBe('C++ 강좌');
   });
 });

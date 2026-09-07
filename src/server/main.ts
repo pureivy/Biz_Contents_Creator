@@ -4000,7 +4000,7 @@ async function demandCheckFor(
   if (offSeason) return { verdict: 'reject', line: `시기 밖 소재(${offSeason.term}: ${formatMonths(offSeason.months)}, 지금 ${new Date().getMonth() + 1}월)` };
   // 수종 월 상한(2026-08-27) — 예고·클러스터 주제도 최근 30일 같은 수종 블로그가 상한이면 기각.
   const capped = overSpeciesCap(keyword, speciesCoverageFor(slug), getBrand()?.speciesCatalog);
-  if (capped) return { verdict: 'reject', line: `수종 월 상한(${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})` };
+  if (capped) return { verdict: 'reject', line: `소재 월 상한(${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})` };
   const cappedTheme = overThemeCap(keyword, brandThemeCoverage(new Date(), slug), getBrand()?.topicThemes);
   if (cappedTheme) return { verdict: 'reject', line: `주제 축 월 상한(${cappedTheme.theme}: 30일 ${cappedTheme.count}편 ≥ ${THEME_MONTHLY_CAP})` };
   const cfg = { minVolume: CONFIG.topicDemandMinVolume, minSeason: CONFIG.topicDemandMinSeason };

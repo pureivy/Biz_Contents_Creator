@@ -1,6 +1,9 @@
 import { describe, it, expect } from 'vitest';
 import { speciesInText, speciesCoverage, overSpeciesCap, speciesRotationBlock, SPECIES_MONTHLY_CAP, speciesCapFor } from './speciesRotation';
 
+/** 원예 브랜드가 설정으로 주던 총칭어 — 범용화 후에는 brand.yaml subjectGenericTerms 가 준다. */
+const GENERIC = ['나무', '묘목', '유실수', '조경수'];
+
 const CAT = [
   { group: '유실수', species: [{ name: '사과나무', aliases: ['사과'] }, { name: '배나무' }, { name: '블루베리', aliases: ['블루베리나무'] }, { name: '매실나무', aliases: ['매실'] }] },
   { group: '조경수', species: [{ name: '배롱나무', aliases: ['배롱', '백일홍나무'] }, { name: '느티나무', aliases: ['느티'] }] },
@@ -47,13 +50,19 @@ describe('speciesCoverage / overSpeciesCap — 30일 창 편수와 월 상한', 
 describe('speciesRotationBlock — 제안 금지·피함·우선 목록', () => {
   it('세 묶음을 분류별로 나열한다', () => {
     const cov = new Map([['배롱나무', 3], ['블루베리', 1]]);
-    const b = speciesRotationBlock(CAT, cov);
+    const b = speciesRotationBlock(CAT, cov, SPECIES_MONTHLY_CAP, 5, GENERIC);
     expect(b).toContain('제안 금지');
     expect(b).toContain('배롱나무(3편)');
     expect(b).toContain('피함: 블루베리(1편)');
     expect(b).toContain('· 유실수: 사과나무, 배나무, 매실나무');
     expect(b).toContain('· 조경수: 느티나무');
     expect(b).toContain('최소 5개');
+    expect(b).toContain('총칭(나무·묘목·유실수·조경수)만으로 된 주제는 최대 1개.');
+  });
+  it('총칭어가 없으면 총칭 제한 문장을 넣지 않는다 — 업종에 총칭이 없을 수 있다', () => {
+    const b = speciesRotationBlock(CAT, new Map(), SPECIES_MONTHLY_CAP, 5, []);
+    expect(b).toContain('한 후보에 소재 하나만.');
+    expect(b).not.toContain('총칭');
   });
   it('카탈로그 없으면 빈 문자열', () => { expect(speciesRotationBlock(undefined, new Map())).toBe(''); });
 });

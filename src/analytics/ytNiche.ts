@@ -55,7 +55,7 @@ export async function refreshYtNicheSnapshot(signal?: AbortSignal): Promise<void
     const key = getSecret('YOUTUBE_API_KEY');
     if (!key) return;
     const slug = activeBrandSlug();
-    const seeds = discoverySeeds(MAX_SEEDS);   // 카탈로그 회전(2026-08-27) — 안 다룬 수종의 유튜브 동향
+    const seeds = discoverySeeds(MAX_SEEDS);   // 카탈로그 회전(2026-08-27) — 안 다룬 소재의 유튜브 동향
     if (!seeds.length) return;
     const today = localDateStr();
     if (readYtNicheSnap(slug)?.date === today) return;

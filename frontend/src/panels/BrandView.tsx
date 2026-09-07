@@ -137,6 +137,29 @@ export default function BrandView() {
         </div>
       </div>
 
+      <div className="review-section">
+        <h3>업종 어휘 <span className="muted">— 선택, 비우면 업종 중립 기본</span></h3>
+        <div style={{ display: "grid", gap: 8 }}>
+          <input type="text" value={b.subjectNoun ?? ""} placeholder="소재 총칭 (예: 식물 / 제품 / 메뉴) — 프롬프트의 '대상 ○○' 자리, 비우면 '소재'"
+            onChange={(e) => set("subjectNoun", e.target.value)} />
+          <input type="text" value={b.subjectTraits ?? ""} placeholder="소재 시각 특징 축 (예: 잎 모양·잎차례·수형 / 형태·색·재질) — 이미지 앵커 지시문"
+            onChange={(e) => set("subjectTraits", e.target.value)} />
+          <input type="text" value={(b.subjectGenericTerms ?? []).join(", ")} placeholder="소재 총칭어 (쉼표 구분, 예: 나무, 묘목, 유실수) — 총칭만인 주제 제한·계열 분류 제외"
+            onChange={(e) => set("subjectGenericTerms", e.target.value.split(",").map((x) => x.trim()).filter(Boolean))} />
+          <input type="text" value={(b.subjectStopwords ?? []).join(", ")} placeholder="업종 일반어 (쉼표 구분, 예: 전정, 화분, 물주기) — 소재 이름으로 오면 사전을 오염시키는 말"
+            onChange={(e) => set("subjectStopwords", e.target.value.split(",").map((x) => x.trim()).filter(Boolean))} />
+          <input type="text" value={(b.keywordExamples ?? []).join(", ")} placeholder="검색어 예시 (쉼표 구분, 2~3어절, 예: 매실나무 가지치기) — 주제 제안 프롬프트의 예시"
+            onChange={(e) => set("keywordExamples", e.target.value.split(",").map((x) => x.trim()).filter(Boolean))} />
+          <input type="text" value={(b.subjectIntentTerms ?? []).join(", ")} placeholder="검색 의도어 (쉼표 구분, 예: 심기, 가지치기, 물주기) — 비우면 범용 의도어"
+            onChange={(e) => set("subjectIntentTerms", e.target.value.split(",").map((x) => x.trim()).filter(Boolean))} />
+          <input type="text" value={b.subjectAnchorPattern ?? ""} placeholder="소재 앵커 정규식 (선택, 예: [가-힣]{1,6}나무) — 비우면 소재 카탈로그 이름으로 판정"
+            onChange={(e) => set("subjectAnchorPattern", e.target.value)} />
+          <input type="text" value={(b.activityAxes ?? []).map((g) => g.join(", ")).join("; ")}
+            placeholder="행위 축 동의어 (그룹은 세미콜론, 동의어는 쉼표 — 예: 전정, 가지치기; 물주기, 급수) — 첫 항이 표준형, 계열 쿨다운 폴백"
+            onChange={(e) => set("activityAxes", e.target.value.split(";").map((g) => g.split(",").map((t) => t.trim()).filter(Boolean)).filter((g) => g.length))} />
+        </div>
+      </div>
+
       <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
         <button className="btn start" disabled={saving || !b.name.trim()} onClick={doSave}>{saving ? "저장 중…" : "저장"}</button>
         {msg && <span className="muted">{msg}</span>}

@@ -33,6 +33,15 @@ export interface BrandInfo {
   channel?: string;
   /** 카드뉴스 기본 이미지 스타일(브랜드 고정 — 자동 파생 포함). 미설정=디자이너 자동. */
   cardStyle?: string;
+  // ── 업종 어휘 프로필(2026-09-07 범용화) — 미설정=업종 중립 기본. src/content/brand.ts 참고. ──
+  subjectNoun?: string;
+  subjectTraits?: string;
+  subjectStopwords?: string[];
+  subjectGenericTerms?: string[];
+  keywordExamples?: string[];
+  subjectIntentTerms?: string[];
+  subjectAnchorPattern?: string;
+  activityAxes?: string[][];
 }
 export async function fetchBrand(): Promise<BrandInfo | null> {
   try { const r = await fetch("/brand"); if (!r.ok) return null; return (await r.json()).brand ?? null; }

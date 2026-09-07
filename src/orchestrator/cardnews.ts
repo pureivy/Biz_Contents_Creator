@@ -28,7 +28,7 @@ import type { FactGateInfo } from '../content/factGate';
 import { cardStyleIssues } from '../content/styleLint';
 import { currentStructureSeed, type StructureSeed } from '../content/structureSeed';
 import { promiseStore } from '../content/promises';
-import { brandContext, getBrand } from '../content/brand';
+import { brandContext, getBrand, subjectNoun, subjectTraits } from '../content/brand';
 import { priorCoverageBrief, recentPhrasesToAvoid, OVERUSED_LEXEME_GUIDE } from '../content/priorCoverage';
 import { generateImagesForDraft, searchCardRefs } from '../tools/blog_skills';
 import { pruneByPrefix, humanBytes } from '../util/prune';
@@ -374,8 +374,8 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     '',
     // 키워드가 있으면 '주제어' 수준이 아니라 정확 표기를 요구(2026-07-31 — 훅 자유는 유지: headline 또는 body 택일 허용).
     keyword
-      ? `독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로 반드시 포함하고(훅과 병행 — 훅을 위해 키워드를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라. 키워드는 명사구 그대로 문장과 자연스럽게 결합하라 — 키워드에 어미를 붙여 동사화하지 마라("묘목선별하면" 식 금지, 실측 유출). 정확 표기는 표지 1회면 충분하다 — 마무리 장 헤드라인·캡션 본문에 키워드를 반복하지 마라(첫 해시태그가 정확 일치를 담당한다).`
-      : '독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 주제어(식물명·행위명 등)를 반드시 명시하고(훅과 병행 — 훅을 위해 주제어를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.',
+      ? `독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 키워드 '${keyword}' 를 정확히 이 표기 그대로 반드시 포함하고(훅과 병행 — 훅을 위해 키워드를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라. 키워드는 명사구 그대로 문장과 자연스럽게 결합하라 — 키워드에 어미를 붙여 동사화하지 마라("소재선별하면" 식 금지, 실측 유출). 정확 표기는 표지 1회면 충분하다 — 마무리 장 헤드라인·캡션 본문에 키워드를 반복하지 마라(첫 해시태그가 정확 일치를 담당한다).`
+      : '독자는 원문 블로그를 본 적이 없다 — 카드 단독으로 완결되게 써라: 표지(headline 또는 body)에 핵심 주제어(대상명·행위명 등)를 반드시 명시하고(훅과 병행 — 훅을 위해 주제어를 빼지 말 것), 각 장은 앞 장과 표지만으로 무슨 대상 이야기인지 읽히게 하라.',
     // ── 문체 블록(자연스러움 감사 2026-08-11 신설, 같은 날 압축) — 종전엔 기획 프롬프트에 문체 지침이 0줄이라
     //    모델 기본값(격식 평서문 균질 배분)으로 수렴했다(40장 중 36장 "-ㅂ니다" 종결 실측). 초판 4블록은
     //    사고 폭증으로 출력 상한(9000)까지 초과시켜(테스트 런 2연속 실패) 규칙만 남기고 절반으로 압축했다.
@@ -384,7 +384,7 @@ async function planCards(io: JobIO, topic: string, keyword: string | undefined, 
     '[우선순위] 아래 문체 지침은 표현 방식 지침이다 — 원문에서 추린 방법·이유·위험 근거 문장을 삭제하는 방식으로 이행하지 마라. 문체와 정보가 충돌하면 정보를 남기고 문체를 양보하라.',
     // 결론 의무+용어 문턱(사용자 확정 2026-08-12): 실측 — "도장지"를 표지부터 캡션까지 한 번도 안 풀었고,
     // 헤드라인 "다섯 곳"에 본문은 "세 가지"만 제시하는 수치 불일치까지 나왔다.
-    '[결론·용어] 구별·진단 소재면 각 장의 관찰에 그것이 대개 무엇을 뜻하는지(통설 수준 — "대개" 유보로 단정 가능) 또는 무엇을 하라는지를 붙여라 — 보는 법만 나열하고 끝나면 실패. 표지·헤드라인의 핵심어가 전문용어면 반 문장으로 풀어라("도장지(웃자란 가지)"). 헤드라인의 수치·개수는 본문이 실제로 그만큼 채워야 한다.',
+    '[결론·용어] 구별·진단 소재면 각 장의 관찰에 그것이 대개 무엇을 뜻하는지(통설 수준 — "대개" 유보로 단정 가능) 또는 무엇을 하라는지를 붙여라 — 보는 법만 나열하고 끝나면 실패. 표지·헤드라인의 핵심어가 전문용어면 반 문장으로 풀어라("전문어(쉬운 말로 풀이)"). 헤드라인의 수치·개수는 본문이 실제로 그만큼 채워야 한다.',
     cardVoiceGuide(CONFIG.voiceRotation, !!endingsAvoid),
     endingsAvoid,
     '[여운·관점] 본문 1장은 결론 없이 다음 장으로 궁금증을 넘기되, 그 답을 반드시 바로 다음 장 첫 줄에서 준다. 본문 1장에는 판단의 표명 한 줄("이럴 땐 이 순서부터 봅니다" — "나는/저는/저라면" 같은 1인칭 주어는 쓰지 마라, 주어 없이도 시점이 전달된다. 사용자 확정 2026-08-12. 겪지 않은 사건·일화 날조는 금지) — 근거·이유 줄을 밀어내고 그 자리를 차지하게 하지 마라, 판단은 근거에 덧붙이는 한 줄이다. "X가 아니라 Y" 대조 훅·"오늘 ~" 헤드라인·"N가지" 골격은 과용된 지문이니 다른 각도로 열고, "가 아니라"는 세트 전체 1회 이하.',
@@ -561,8 +561,10 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
   // 노지 수종을 화분에 심어 그리지 않게(2026-09-06 실사고) — "대추나무 결실주" 카드에서
   // 디자이너가 "화분에 심긴 어린 대추나무"라고 써 냈다. 결실주는 과수원 나무다.
   // 앵커는 '종'을 고치지만 '어디에 심겨 있나'는 여기서 정해진다.
+  // 이 지시문은 '땅에 심긴 식물'을 전제하므로 식물 계열 항목에만 건다(2026-09-07 범용화) —
+  // 소재 사전이 식물 아닌 품목을 담는 브랜드에서 노지·밭 장면을 강요하면 안 된다.
   const known = findSpecies(`${keyword ?? ''} ${topic}`);
-  const potGuard = known && !isContainerTopic(`${keyword ?? ''} ${topic}`)
+  const potGuard = known && /교목|관목|초본|나무/.test(known.type ?? '') && !isContainerTopic(`${keyword ?? ''} ${topic}`)
     ? `[재배 환경] ${known.name}는 이 주제에서 땅에 심긴 나무다. 화분·화분받침·실내 베란다 장면으로 그리지 마라 — 노지·밭·정원에 심긴 모습으로 설계하라.`
     : '';
   const user = [
@@ -598,7 +600,8 @@ async function designBackgrounds(io: JobIO, topic: string, plan: Plan, refAnalys
  * 카드 이미지(gpt-image-2) 프롬프트 조립 — card-news-maker 의 에디토리얼 포스터 템플릿 이식.
  * 실무팀 합의·구도(상단 2/3 헤드라인)·타이포·자소 정확도·완성 기준을 명시해 같은 모델로도 품질을 끌어올린다.
  * gpt-image-2 가 한글 문구까지 직접 그리므로 '한 글자도 바꾸지 말고/자소 결합 틀리면 실패'를 강하게 못박는다.
- * 이 프로젝트 무이모지 정책 유지, 페이지 번호(1/8·2/3)는 넣지 않는다(사용자 요청 2026-07-22). 순수 함수(생성 없이 프롬프트 검증 가능).
+ * 이 프로젝트 무이모지 정책 유지, 페이지 번호(1/8·2/3)는 넣지 않는다(사용자 요청 2026-07-22).
+ * 생성 없이 프롬프트 검증 가능 — 다만 앵커 문구의 업종 낱말은 브랜드 설정(subjectNoun·subjectTraits)에서 온다.
  */
 export function buildCardImagePrompt(a: {
   headline: string; body?: string; scene: string; style: string; title: string;
@@ -616,7 +619,7 @@ export function buildCardImagePrompt(a: {
   // 숏폼은 2026-09-03 사고 뒤 앵커를 넣었는데 카드뉴스만 빠져 있었다. 같은 값을 같은 꼴로 넣는다.
   if (a.subjectLatin || a.subject) {
     const head = a.subjectLatin ? `${a.subjectLatin}${a.subject ? ` (${a.subject})` : ''}` : a.subject;
-    p.push(`[대상 식물 — 화면의 나무·풀은 반드시 이 종] ${head}. 잎 모양·잎차례·수형을 이 종의 실제 모습대로 그린다. 다른 종으로 대체하거나 일반적인 나무로 뭉개지 마라.`);
+    p.push(`[대상 ${subjectNoun()} — 화면의 대상은 반드시 이것] ${head}. ${subjectTraits()}을 실제 모습대로 그린다. 다른 것으로 대체하거나 일반적인 모습으로 뭉개지 마라.`);
   }
   if (hasRefs) p.push('[레퍼런스 스타일 차용] 첨부된 레퍼런스 이미지의 색 팔레트·타이포 형식·질감·여백 규칙·대비 감각만 차용한다. 특정 오브젝트·배치·이미지는 복제하지 않고, 이 슬라이드만의 구도와 시각 모티프를 새로 구성한다.');
   if (preset === 'handwritten_poster') {
@@ -1000,7 +1003,7 @@ export async function runCardNewsJob(
     const hasRefs = refs.refPaths.length > 0;
     // 수종 사전 조회(2026-09-06) — 숏폼과 같은 근거를 카드뉴스도 쓴다.
     const known = findSpecies(`${card.keyword ?? ''} ${plan.title}`);
-    if (known) say(`수종 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
+    if (known) say(`소재 사전 적중 — ${known.name} (${known.latin})${known.verified ? '' : ' · 형태 묘사 미검토'}`);
     const cardPrompt = (i: number): string => buildCardImagePrompt({
       headline: plan.slides[i]!.headline, body: plan.slides[i]!.body, scene: design.prompts[i] ?? '',
       style: design.style, title: plan.title, index: i, total, hasRefs, preset: design.preset,

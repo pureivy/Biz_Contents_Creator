@@ -20,17 +20,22 @@
  * 축 분류는 표현 매칭이라 근사다. 정교한 분류기가 아니라 '기울이는 신호'로만 쓴다.
  */
 
+import { activityAxes } from '../content/brand';
+
 export interface AxisPerf { readonly axis: string; readonly count: number; readonly median: number }
 
-/** 소재 축 — 이름과 판별 표현. 앞에서부터 먼저 걸리는 축을 쓴다(구체적인 것을 앞에). */
-export const IG_AXES: ReadonlyArray<{ axis: string; test: RegExp }> = [
-  { axis: '전정·가지치기', test: /전정|가지치기|자르|잘라|솎|삽목|접목/ },
-  { axis: '꽃·개화', test: /꽃|개화|봉오리|화단/ },
-  { axis: '열매·수확', test: /열매|수확|과실|당도|익는/ },
-  { axis: '화분·실내', test: /화분|베란다|실내|분갈이/ },
-  { axis: '심기·자리', test: /심기|식재|이식|자리|생울타리|묘목/ },
-  { axis: '관리·병해', test: /물주기|거름|비료|병해|해충|월동|보호/ },
-];
+export interface IgAxis { readonly axis: string; readonly test: RegExp }
+const escapeRe = (t: string): string => t.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+/**
+ * 소재 축 — 이름과 판별 표현. 브랜드 행위 축(activityAxes)에서 만든다: terms[0] 이 축 이름, terms 전부가 판별 표현.
+ * 앞에서부터 먼저 걸리는 축을 쓴다(구체적인 것을 앞에). 브랜드 설정이 없으면 축이 없고 전부 '기타'다 —
+ * 종전엔 원예 축 6개(전정·꽃·열매·화분·심기·관리)가 코드에 박혀 있었다(범용화 2026-09-07).
+ */
+export function igAxes(axes: ReadonlyArray<{ terms: string[] }> = activityAxes()): IgAxis[] {
+  return axes
+    .filter((a) => a.terms.length)
+    .map((a) => ({ axis: a.terms[0]!, test: new RegExp(a.terms.map(escapeRe).join('|')) }));
+}
 
 /**
  * 이 주제가 '화분·실내' 재배 이야기인가(순수).
@@ -43,20 +48,21 @@ export const IG_AXES: ReadonlyArray<{ axis: string; test: RegExp }> = [
  * "색이 바랜 화분, 물 자국이 남은 받침"을 넣었다. 결실주는 과수원 나무인데 화분을 지시하니
  * 모델이 화분에 심긴 관엽식물을 그렸고, 대추나무가 아니게 됐다.
  */
-export function isContainerTopic(text: string): boolean {
+export function isContainerTopic(text: string, axes: readonly IgAxis[] = igAxes()): boolean {
   const t = String(text ?? '');
   if (!t.trim()) return false;
-  return (IG_AXES.find((a) => a.axis === '화분·실내')?.test ?? /$^/).test(t);
+  // '화분·실내' 이름의 축이 브랜드에 있을 때만 판정 — 없으면 컨테이너 소품 판정 자체가 없다.
+  return (axes.find((a) => /화분|실내/.test(a.axis))?.test ?? /$^/).test(t);
 }
 
 /** 축에 안 걸리는 소재의 이름 — 실측에서 가장 큰 덩어리이자 최하위권이다. */
 export const AXIS_NONE = '기타';
 
 /** 텍스트가 어느 축인가(순수). 어느 것에도 안 걸리면 AXIS_NONE. */
-export function classifyAxis(text: string): string {
+export function classifyAxis(text: string, axes: readonly IgAxis[] = igAxes()): string {
   const t = String(text ?? '');
   if (!t.trim()) return AXIS_NONE;
-  return IG_AXES.find((a) => a.test.test(t))?.axis ?? AXIS_NONE;
+  return axes.find((a) => a.test.test(t))?.axis ?? AXIS_NONE;
 }
 
 /** 중앙값(순수). 빈 배열은 0. */
@@ -72,13 +78,13 @@ function median(a: readonly number[]): number {
  * 2~3편으로 만든 중앙값을 근거로 주제를 기울이면 잡음을 따라가게 된다.
  */
 export function axisPerformance(
-  rows: ReadonlyArray<{ text: string; views: number }>, minCount = 5,
+  rows: ReadonlyArray<{ text: string; views: number }>, minCount = 5, axes: readonly IgAxis[] = igAxes(),
 ): AxisPerf[] {
   const by = new Map<string, number[]>();
   for (const r of rows) {
     const v = Number(r?.views);
     if (!Number.isFinite(v) || v < 0) continue;
-    const a = classifyAxis(r.text);
+    const a = classifyAxis(r.text, axes);
     by.set(a, [...(by.get(a) ?? []), v]);
   }
   return [...by.entries()]
@@ -91,7 +97,7 @@ export function axisPerformance(
  * 주제 제안 프롬프트에 넣을 축 블록(순수).
  *
  * "이 소재를 다뤄라"가 아니라 "각도를 이렇게 잡아라"로 쓴다. 축은 소재가 아니라 프레이밍이고,
- * 같은 수종도 전정·심기·월동 어느 쪽으로든 잡을 수 있다. 계절과 싸우지 않게 하는 것도 이 때문이다.
+ * 같은 소재도 어느 축으로든 잡을 수 있다. 계절과 싸우지 않게 하는 것도 이 때문이다.
  */
 export function axisBlock(perf: readonly AxisPerf[]): string {
   if (perf.length < 2) return '';
@@ -102,7 +108,7 @@ export function axisBlock(perf: readonly AxisPerf[]): string {
     ...perf.map((p) => `- ${p.axis}: 중앙 ${p.median.toLocaleString()}회 (${p.count}편)`),
     '',
     `· 각도를 정할 때 위쪽 축(${top.join(', ')})으로 잡을 수 있으면 그렇게 잡아라.`,
-    '· 축은 소재가 아니라 프레이밍이다 — 같은 수종도 전정으로, 심기로, 월동으로 잡을 수 있다.',
+    '· 축은 소재가 아니라 프레이밍이다 — 같은 소재도 어느 축으로든 잡을 수 있다.',
     none
       ? `· 다만 어느 축에도 안 걸리는 주제가 가장 많고(${none.count}편) 성적도 낮다(중앙 ${none.median.toLocaleString()}회). 주제를 정했으면 그 주제가 위 축 중 하나로 읽히는지 확인하라.`
       : '',

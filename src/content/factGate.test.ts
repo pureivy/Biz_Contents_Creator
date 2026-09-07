@@ -6,7 +6,7 @@ import {
   splitBodySentences, numericClaimSentences, buildEvidence, gateVerdict, formatGateFeedback, toFactGateInfo,
   extractFactClaims, judgeClaims, factGateBlog, runFactGateWithRepair,
   isJudgmentSentence, hasHedge, hasEventMarkers, classifyClaim,
-  isHardClaim, HARD_CLAIM_KINDS,
+  isHardClaim, HARD_CLAIM_KINDS, EVENT_MARKER_RE,
   applySentenceRepairs, repairSentences,
   extractFactCard, FACT_CARD_HEADER,
 } from './factGate';
@@ -336,7 +336,7 @@ describe('선분류(2026-08-26 hold 율 저감) — 3런 실측 문장', () => {
     expect(classifyClaim({ text: '벌레 쪽부터 보는 편입니다.', kind: 'general' })).toBe('judgment'); // 권유 고정구는 여전히 판단문
     expect(isJudgmentSentence('그 안이 본편입니다')).toBe(false); // 낱개 "편입니다" 오탐(본편=main episode) 재발 방지
   });
-  it('사건 표지 — 연도·기간·우리 밭·문의 실태만', () => {
+  it('사건 표지 — 연도·기간·우리 매장/밭·문의 실태만', () => {
     expect(hasEventMarkers('지난해 우리 밭 어린 단감나무도 사흘 사이 스무 개 넘게 떨궜습니다')).toBe(true);
     expect(hasEventMarkers('저희 밭에서도 문의가 오면 이렇게 답합니다')).toBe(true);
     expect(hasEventMarkers("화분을 들었을 때 '아직 무겁네' 하는 날이 이어지면 그게 신호예요")).toBe(false);
@@ -347,6 +347,14 @@ describe('선분류(2026-08-26 hold 율 저감) — 3런 실측 문장', () => {
     expect(hasEventMarkers('흙 산도는 pH 5.5~6.5 사이가 알맞습니다.')).toBe(false); // 숫자+'사이'는 일 단위가 아니면 표지 아님
     expect(hasEventMarkers('하루 이틀 만에 물러집니다')).toBe(false); // 기간 표지는 있으나 1인칭 주어가 없다
     expect(hasEventMarkers('우리 밭에서는 사흘 만에 떨어졌습니다')).toBe(true); // 1인칭 + 기간 = 사건
+  });
+  it('업종 중립 장소도 사건 표지다 — 밭 없는 업종의 1인칭 경험을 놓치면 안 된다', () => {
+    for (const s of ['우리 매장에서', '저희 가게에서 지난달', '우리 공방에서 만든', '저희 작업실에서', '우리 주방에서']) {
+      expect(hasEventMarkers(s), `${s} 를 놓쳤다`).toBe(true);
+      // 문서화용 결합 정규식도 같은 장소 목록이어야 한다 — hasEventMarkers 만 고치면 갈린다.
+      expect(EVENT_MARKER_RE.test(s), `${s} — EVENT_MARKER_RE 가 갈렸다`).toBe(true);
+    }
+    expect(hasEventMarkers('매장에 물건이 있습니다')).toBe(false); // 1인칭이 없으면 사건이 아니다
   });
   it('classifyClaim 우선순위: event > judgment > hedged > claim', () => {
     expect(classifyClaim({ text: '지난해 우리 밭에서는 그렇게 봤습니다.', kind: 'experience' })).toBe('event');

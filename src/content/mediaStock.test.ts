@@ -5,12 +5,12 @@ import type { StockItem } from './mediaStock';
 const vid = (species: string, seconds: number): StockItem => ({ species, seconds, kind: 'video' });
 
 describe('unusedStock — 안 쓴 소재 묶기(순수)', () => {
-  it('쓴 수종은 빼고 안 쓴 것만 준다', () => {
+  it('쓴 소재는 빼고 안 쓴 것만 준다', () => {
     const rows = unusedStock([vid('감나무', 30), vid('사과나무', 25)], new Set(['사과나무']));
     expect(rows.map((r) => r.species)).toEqual(['감나무']);
   });
 
-  it('같은 수종 여러 건은 하나로 묶고 건수를 센다', () => {
+  it('같은 소재 여러 건은 하나로 묶고 건수를 센다', () => {
     const rows = unusedStock([vid('대추나무', 30), vid('대추나무', 23)], new Set());
     expect(rows).toEqual([{ species: '대추나무', count: 2, seconds: 30 }]);
   });
@@ -25,7 +25,7 @@ describe('unusedStock — 안 쓴 소재 묶기(순수)', () => {
     expect(unusedStock([vid('감나무', MIN_USABLE_SEC)], new Set())).toHaveLength(1);
   });
 
-  it('사진은 안 센다 — 사장님이 말한 것은 영상 자료다', () => {
+  it('사진은 안 센다 — 사용자가 말한 것은 영상 자료다', () => {
     expect(unusedStock([{ species: '감나무', seconds: 30, kind: 'image' }], new Set())).toEqual([]);
   });
 
@@ -52,7 +52,7 @@ describe('unusedStock — 안 쓴 소재 묶기(순수)', () => {
     expect(rows.map((r) => r.species)).toEqual(['홍가시나무']);
   });
 
-  it('딱지 원문을 그대로 내놓는다 — 사장님이 적은 이름으로 프롬프트에 나가야 한다', () => {
+  it('딱지 원문을 그대로 내놓는다 — 운영자가 적은 이름으로 프롬프트에 나가야 한다', () => {
     const canon = (n: string): string => (n === '백일홍' ? '배롱나무' : n);
     expect(unusedStock([vid('백일홍', 24)], new Set(), canon)[0]!.species).toBe('백일홍');
   });
@@ -77,7 +77,7 @@ describe('stockBlock — 프롬프트 블록(순수)', () => {
     expect(stockBlock([])).toBe('');
   });
 
-  it('수종 이름을 대고, 여러 건이면 건수를 붙인다', () => {
+  it('소재 이름을 대고, 여러 건이면 건수를 붙인다', () => {
     const b = stockBlock(rows);
     expect(b).toContain('대추나무(2건)');
     expect(b).toContain('감나무');
@@ -99,12 +99,12 @@ describe('stockBlock — 프롬프트 블록(순수)', () => {
     const many = Array.from({ length: STOCK_NAMES_IN_PROMPT + 5 }, (_, i) =>
       ({ species: `수종${i}`, count: 1, seconds: 10 }));
     const b = stockBlock(many);
-    expect(b).toContain('외 5종');
+    expect(b).toContain('외 5건');
     expect(b).not.toContain(`수종${STOCK_NAMES_IN_PROMPT}`);
   });
 });
 
-describe('usedSpecies — 실촬영이 나간 수종 읽기(주입 의존)', () => {
+describe('usedSpecies — 실촬영이 나간 소재 읽기(주입 의존)', () => {
   const shorts = [
     { id: 'a', keyword: '감나무 묘목', title: '감나무 심는 시기' },
     { id: 'b', keyword: '사과나무', title: '사과나무 열매' },
@@ -113,7 +113,7 @@ describe('usedSpecies — 실촬영이 나간 수종 읽기(주입 의존)', () 
   const speciesOf = (t: string): string | undefined =>
     ['감나무', '사과나무'].find((s) => t.includes(s));
 
-  it('user 클립이 구워진 편의 수종만 센다', () => {
+  it('user 클립이 구워진 편의 소재만 센다', () => {
     const got = usedSpecies(shorts, { hasUserClip: (id) => id === 'a', speciesOf });
     expect([...got]).toEqual(['감나무']);
   });
@@ -122,12 +122,12 @@ describe('usedSpecies — 실촬영이 나간 수종 읽기(주입 의존)', () 
     expect([...usedSpecies(shorts, { hasUserClip: () => false, speciesOf })]).toEqual([]);
   });
 
-  it('수종이 안 잡히는 편은 건너뛴다', () => {
+  it('소재가 안 잡히는 편은 건너뛴다', () => {
     const got = usedSpecies(shorts, { hasUserClip: (id) => id === 'c', speciesOf });
     expect([...got]).toEqual([]);
   });
 
-  it('같은 수종 두 채널은 한 번만 — 승계로 둘 다 클립을 갖는다', () => {
+  it('같은 소재 두 채널은 한 번만 — 승계로 둘 다 클립을 갖는다', () => {
     const pair = [{ id: 'y', title: '감나무 심기' }, { id: 'i', title: '감나무 심기' }];
     expect(usedSpecies(pair, { hasUserClip: () => true, speciesOf }).size).toBe(1);
   });

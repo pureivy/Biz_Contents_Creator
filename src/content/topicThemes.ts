@@ -82,11 +82,11 @@ export function themeRotationBlock(
   }
   priority.sort((a, b) => a.n - b.n); // 적은 순 — 0편이 있으면 그게 맨 앞
   const fresh = priority.map((p) => p.line);
-  const lines = [`[주제 축 로테이션 — 최근 ${THEME_WINDOW_DAYS}일 블로그 기준, 축당 상한 ${cap}편 · 수종 로테이션과 별개 축]`];
+  const lines = [`[주제 축 로테이션 — 최근 ${THEME_WINDOW_DAYS}일 블로그 기준, 축당 상한 ${cap}편 · 소재 로테이션과 별개 축]`];
   if (capped.length) lines.push(`- 상한 도달 → 제안 금지(코드가 기각한다): ${capped.join(', ')}`);
   if (recent.length) lines.push(`- 최근 다룸 → 가급적 피함: ${recent.join(', ')}`);
   if (fresh.length) lines.push('- 적게 다룬 축 → **여기서 우선 고른다**(사람들이 실제로 치는 검색어 예시):', ...fresh);
-  lines.push('- 후보 8개는 서로 다른 축에서 고르고, 수종 × 축 조합은 기존 글과 겹치지 않게.');
+  lines.push('- 후보 8개는 서로 다른 축에서 고르고, 소재 × 축 조합은 기존 글과 겹치지 않게.');
   // 좁은 장에서의 지시 강화(2026-08-30) — 축이 많이 막히면 "가급적 피함"까지 써야 후보가 채워진다.
   // 그 사실을 명시하지 않으면 두뇌가 상한 축에서 8개를 억지로 만들고 전부 코드 기각된다(실측: 16축 중
   // 7축 포화 상태에서 한 라운드 17건 기각, 생산 정지). 남은 자리를 세어 알려 주는 편이 정확하다.

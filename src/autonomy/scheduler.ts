@@ -15,7 +15,7 @@ import { resolveAssignment } from '../llm/setting';
 import { getCompany } from '../agents/company-loader';
 import { microJSON } from '../orchestrator/agent';
 import { asString } from '../util/str';
-import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand, lintLexicon } from '../content/brand';
+import { brandContext, brandProductLines, brandSeedKeywords, activeBrandSlug, brandFileSuffix, offBrandTerm, getBrand, lintLexicon, keywordExamples, subjectAnchorTest } from '../content/brand';
 import { titleTypeGuidanceBlock } from '../analytics/titleTiming';
 import { shortsTopicSignalBlock } from '../analytics/shortsPerf';
 import { topicVerdictBlock, avoidVerdictFor, consumeOpportunityVerdict } from '../analytics/topicVerdicts';
@@ -268,7 +268,7 @@ export function eligibleWinners<T extends { keyword?: string; firstSeenAt?: stri
 }
 
 // 성과 전략(analytics/strategy.json, 6d 연동) 있으면 승자 키워드를 아이디어 재료로 — 없으면 콜드스타트(무시).
-/** 최근 30일 블로그의 수종별 편수(브랜드 카탈로그 기준) — 후보 루프·예고·클러스터 게이트가 공유. */
+/** 최근 30일 블로그의 소재별 편수(브랜드 카탈로그 기준) — 후보 루프·예고·클러스터 게이트가 공유. */
 export function speciesCoverageFor(slug: string | undefined, now = new Date()): Map<string, number> {
   try {
     const items = pieceStore().list()
@@ -287,7 +287,7 @@ function readStrategyWinners(): string {
     const cov = speciesCoverageFor(slug || undefined);
     const themeCovW = brandThemeCoverage(new Date(), slug || '');
     return eligibleWinners(raw.winners ?? [], getBrand()?.perfEraSince)
-      // 월 상한에 닿은 수종의 성과 키워드는 빼서 '통했던 배롱'이 매 틱 되주입되는 고리를 끊는다(2026-08-27).
+      // 월 상한에 닿은 소재의 성과 키워드는 빼서 '통했던 배롱'이 매 틱 되주입되는 고리를 끊는다(2026-08-27).
       .filter((w) => !overSpeciesCap(w.keyword ?? '', cov, getBrand()?.speciesCatalog))
       .filter((w) => !overThemeCap(w.keyword ?? '', themeCovW, getBrand()?.topicThemes))   // 축 상한도 같은 이유(수렴 고리 차단)
       .slice(0, 8)
@@ -312,10 +312,11 @@ export function seedKeywordBlock(winners: string, seeds: string[]): string {
   return `[브랜드 시드 키워드(성과가 아직 없는 축 — 위 성과 키워드 대신 여기서 골라도 된다)]\n${seeds.map((k) => `- ${k}`).join('\n')}\n\n`;
 }
 
-const IDEA_SYSTEM =
-  '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 소재 범위의 기준은 [브랜드 컨텍스트]다 — 소개가 말하는 영역 안에서만, ' +
+/** 아이디어 제안 시스템 프롬프트(순수) — 검색어 예시는 브랜드 설정에서 온다(미설정이면 예시 문장 생략). */
+function ideaSystem(examples: string[] = keywordExamples()): string {
+  return '너는 1인 AI 콘텐츠 회사의 자율 편집 기획자다. 소재 범위의 기준은 [브랜드 컨텍스트]다 — 소개가 말하는 영역 안에서만, ' +
   '금지 목록의 소재는 절대 제안하지 마라. [팀·업무 범위]는 제작 공정 설명일 뿐 소재 범위가 아니다. ' +
-  '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어를 서로 소재가 다른 8개, 가장 자신 있는 것부터 순서대로 제안하라(2026-08-27 사용자 확정 8개 — 검색량·시기·수종 게이트가 겹쳐 후보가 전멸하지 않게 폭을 넓힌다).\n' +
+  '다음에 제작하면 검색 노출·유입에 가치있는 네이버 블로그(정보/하우투·리뷰) 콘텐츠 아이디어를 서로 소재가 다른 8개, 가장 자신 있는 것부터 순서대로 제안하라(2026-08-27 사용자 확정 8개 — 검색량·시기·소재 게이트가 겹쳐 후보가 전멸하지 않게 폭을 넓힌다).\n' +
   '- 검색 의도가 뚜렷하고 실용적인 주제(하우투/비교/리뷰/체크리스트 등). 시의성·계절성도 고려한다.\n' +
   '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객의 관심사와 자연스럽게 연결되는 주제를 우선하라(노골적 광고성 주제 금지 — 독자에게 유용한 정보가 우선).\n' +
   '- [성과 상위 키워드]는 어떤 분야가 통했는지의 참고다 — 그 분야의 인접·연관 영역에서 새로운 키워드를 발굴하라(성과 키워드 자체나 그 변형의 재사용은 금지). 없으면(콜드스타트) 영역 안에서 다양하게 탐색한다.\n' +
@@ -323,7 +324,8 @@ const IDEA_SYSTEM =
   '- [최근 제작]·[최근 자율주제]와 중복되지 않게 하라.\n' +
   '- [기존 콘텐츠]와 겹치지 않는 새 소재를 우선하라. 좋은 주제가 기존과 겹치면 버리지 말고, 기존 글과 뚜렷이 다른 시각(대상·상황·계절·관점)을 잡아 제안하라(사용자 원칙 2026-08-14 — 종전 "완전히 새로운 각도만"에서 개정).\n' +
   '- title 은 클릭·검색에 유리한 한국어 제목, keyword 는 검색량 있을 법한 핵심 타겟 키워드 1개, subNiche 는 세부 분야다.\n' +
-  '- keyword 는 사람이 실제로 검색창에 치는 2~3어절(수종명+행위·대상: "매실나무 가지치기", "사과나무 묘목", "느티나무 심는 시기")로 써라. 설명형 구절("묘목 식재 흙 준비", "정원 과실나무 크기" 식)은 검색량이 0이라 코드가 기각한다 — [검색 수요 실측] 표에 있는 표기를 우선 재사용하라.';
+  `- keyword 는 사람이 실제로 검색창에 치는 2~3어절(소재명+행위·대상${examples.length ? `: ${examples.map((e) => `"${e}"`).join(', ')}` : ''})로 써라. 대상 없이 서술만 이어지는 설명형 구절(4어절 이상)은 검색량이 0이라 코드가 기각한다 — [검색 수요 실측] 표에 있는 표기를 우선 재사용하라.`;
+}
 
 /**
  * 다음에 제작할 콘텐츠 아이디어 1건 제안 — 조직 헌장(팀·업무 범위) + 성과 전략(strategy.json)에 그라운딩.
@@ -358,13 +360,15 @@ export function normalizeIdeaCandidates(raw: unknown, max = IDEA_CANDIDATES): Ar
   return out;
 }
 
-/** 이름·꽃말·상징 유래 주제의 수종 앵커 부재 판정(순수, 테스트 대상) — '회화나무 꽃말'은 통과,
- *  '튤립 꽃말'·'나무 이름 유래'(총칭)는 기각. '~나무' 표기가 한국어 수종명 대부분을 커버한다. */
-export function lacksSpeciesAnchor(text: string): boolean {
+/** 이름·꽃말·상징 유래 주제의 소재 앵커 부재 판정(순수, 테스트 대상) — 앵커 판정기(브랜드 정규식·카탈로그
+ *  이름)가 있을 때만 '○○ 꽃말'에 소재가 명시됐는지 본다. 판정기가 없으면(브랜드 미설정) 판단 근거가
+ *  없으므로 통과시킨다(fail-open) — 게이트가 없는 것과 같다. */
+export function lacksSpeciesAnchor(text: string, anchored: ((t: string) => boolean) | null = subjectAnchorTest()): boolean {
   const t = (text || '').normalize('NFC');
   // '상징'은 수사적 사용("가을의 상징")이 흔해 트리거에서 제외 — 축의 핵심 표지인 꽃말·유래만 본다.
   if (!/꽃말|유래/.test(t)) return false;
-  return !/[가-힣]{1,6}나무/.test(t);                        // 수종 앵커(○○나무) 존재 여부
+  if (!anchored) return false;                              // 소재 앵커를 판정할 수 없음 — 기각하지 않는다
+  return !anchored(t);                                      // 소재 앵커 존재 여부
 }
 
 /**
@@ -477,11 +481,11 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 브랜드 슬러그는 여기서 한 번 고정한다 — 프롬프트 조립과 후보 루프가 LLM 왕복(수 초)을 여러 번 건너므로
   // 그 사이 브랜드가 전환되면 기각 기억을 A 로 읽고 B 에 쓰게 된다(아래 ResearchState 의 slug 고정과 같은 버그).
   const slug = activeBrandSlug() || '';
-  const speciesCov = speciesCoverageFor(slug);   // 수종 로테이션(2026-08-27) — 프롬프트 블록·후보 게이트·winners 필터 공용
-  // 수종 월 상한에 수요 가중(2026-09-04 사용자 확정) — 수요 큰 수종은 몇 편 더 허용한다.
-  // 실측 배분이 어긋나 있었다: 수요 22/월 배롱나무에 6편, 검색 1,085회를 물어다 준 수종엔 3편.
-  // 느슨하게만 만든다 — 수요 미상 수종은 종전 상한(2편) 그대로다. 최고 성적이 수요 목록 밖
-  // 수종(하스카프베리)에서 나왔으므로, 낮은 수요로 조이면 그 발견 자체를 막게 된다.
+  const speciesCov = speciesCoverageFor(slug);   // 소재 로테이션(2026-08-27) — 프롬프트 블록·후보 게이트·winners 필터 공용
+  // 소재 월 상한에 수요 가중(2026-09-04 사용자 확정) — 수요 큰 소재는 몇 편 더 허용한다.
+  // 실측 배분이 어긋나 있었다: 수요 22/월 배롱나무에 6편, 검색 1,085회를 물어다 준 소재엔 3편.
+  // 느슨하게만 만든다 — 수요 미상 소재는 종전 상한(2편) 그대로다. 최고 성적이 수요 목록 밖
+  // 소재(하스카프베리)에서 나왔으므로, 낮은 수요로 조이면 그 발견 자체를 막게 된다.
   const demandRows = (() => {
     try { return (readDemandSnap(slug || undefined)?.rows ?? []).map((r) => ({ keyword: r.keyword, total: Math.max(r.volume, r.familyMax) })); }
     catch { return [] as Array<{ keyword: string; total: number }>; }
@@ -489,7 +493,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   const speciesCap = (name: string): number => {
     try { return speciesCapFor(familyVolume(demandRows, name).max); } catch { return SPECIES_MONTHLY_CAP; }
   };
-  const themeCov = brandThemeCoverage(new Date(), slug);   // 주제 축 로테이션(2026-08-27) — 수종과 직교
+  const themeCov = brandThemeCoverage(new Date(), slug);   // 주제 축 로테이션(2026-08-27) — 소재와 직교
 
   // 브랜드 설정 시: 주제를 브랜드 제품·타겟에 조향 + 콜드스타트는 시드 키워드에서 출발 +
   // subNiche 를 제품 라인으로 제약(기존 서브니치 EWMA 가 그대로 '제품 라인별 성과 학습'이 된다).
@@ -508,7 +512,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 실측 유튜브 검색어(2026-09-04 사용자 확정) — 이 채널에서 재현 가능한 성장 축은 검색이다.
   // 피드가 끊긴 뒤에도 검색만 살아남았고, 평탄선을 넘긴 두 편은 둘 다 검색으로 넘겼다.
   // 잡음 거르기는 여기서 한다: 수집된 말에는 무관한 트렌드어가 섞인다("감스트 리중딱" 등).
-  // 우리 분야인지는 수종 사전과 브랜드 업종어로 판정한다 — 둘 다 이미 있는 데이터다.
+  // 우리 분야인지는 소재 사전과 브랜드 업종어로 판정한다 — 둘 다 이미 있는 데이터다.
   const searchBlock = (() => {
     try {
       const stems = [...(getBrand()?.compoundStems ?? []), ...seeds];
@@ -517,7 +521,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
       const rows = rankSearchDemand(scored, {
         // 그 말을 정면으로 다룬 편이 있는가 — 제목·키워드에 그 말이 통째로 들어갔는지로 본다.
         isCovered: (k) => { const n = normalizeTerm(k); return covered.some((c) => c.includes(n)); },
-        // 우리 분야의 말인가 — 수종 이름이나 업종어를 품고 있으면 우리 것으로 본다.
+        // 우리 분야의 말인가 — 소재 이름이나 업종어를 품고 있으면 우리 것으로 본다.
         isRelevant: (k) => !!findSpecies(k) || stems.some((t) => t && k.includes(t)),
         limit: 15,
       });
@@ -528,7 +532,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
   // 인스타 소재 축 성적(2026-09-04 사용자 확정) — 같은 소재라도 각도로 도달이 갈린다.
   // 실측 111편: 꽃·개화 중앙 1,362 · 전정 943 … 기타 557(39편, 가장 큰 덩어리이자 최하위권).
   // "이 소재를 다뤄라"가 아니라 "각도를 이렇게 잡아라"로 쓴다 — 계절과 싸우지 않게.
-  // 실촬영 재고(2026-09-06) — 아직 화면에 안 나간 사장님 촬영본이 있는 수종.
+  // 실촬영 재고(2026-09-06) — 아직 화면에 안 나간 운영자 촬영본이 있는 소재.
   // 소진 판정은 clips/user_*.mp4 존재로 본다(배정 시도가 아니라 구워진 것이 근거).
   const stockBlockStr = (() => {
     try {
@@ -618,14 +622,14 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         + '\n'
       : '') +
     // 신호 서열 선언(리뷰 지적) — 명령형 블록 6종이 서열 없이 나열되면 micro 가 어느 지시에 최적화할지 비결정적.
-    // 로테이션을 서열 1군에 명시(2026-08-30) — 종전 서열은 쿨다운·폐기·유사만 '금지'로 세우고 축·수종
+    // 로테이션을 서열 1군에 명시(2026-08-30) — 종전 서열은 쿨다운·폐기·유사만 '금지'로 세우고 축·소재
     // 상한을 빼놨다. 그러면 아래 시드·수요 표·연관어가 막힌 축 키워드를 내밀 때 두뇌가 그쪽을 따르고,
     // 후보 8개가 전부 코드 기각으로 날아간다(실측 2026-08-30: 한 라운드 기각 17건 중 대부분이 축 상한,
     // 16축 중 7축 포화 상태에서 생산이 멈춤). 로테이션 블록은 이미 '제안 금지'라 적고 있었지만 서열
     // 선언이 그것을 1군으로 인정하지 않아 지시끼리 사실상 동급이었다.
-    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) **주제 축·수종 상한 도달(제안 금지)** · 계열 쿨다운 금지·실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) **[검색 수요 실측] 표 — 여기서 먼저 고른다(선택의 출발점)** > 3) 리서치 기회·실검색 연관어(보강) > 4) 성과 계열 확장(참고). 금지가 항상 이긴다.\n`
+    `[신호 우선순위 — 위 신호들이 충돌할 때] 1) **주제 축·소재 상한 도달(제안 금지)** · 계열 쿨다운 금지·실측 폐기·기존 콘텐츠 유사 회피(금지) > 2) **[검색 수요 실측] 표 — 여기서 먼저 고른다(선택의 출발점)** > 3) 리서치 기회·실검색 연관어(보강) > 4) 성과 계열 확장(참고). 금지가 항상 이긴다.\n`
       + `순서: 먼저 [검색 수요 실측] 표에서 지금 검색되는 키워드를 고르고, 그다음 1군 금지에 걸리는지 확인해 걸리면 표의 다음 행으로 내려가라. 상상으로 주제를 만든 뒤 수요를 맞춰 붙이지 마라 — 그렇게 나온 후보는 대부분 검색량 미달로 버려진다.\n`
-      + `상한 도달 축·수종은 아래 어떤 신호(시드·수요 표·연관어·성과 키워드)에 등장하더라도 후보로 내지 마라 — 코드가 기각해 그 자리가 통째로 버려진다. '아직 안 다룬 축'이 있으면 그 축에서 먼저 채워라.\n\n` +
+      + `상한 도달 축·소재는 아래 어떤 신호(시드·수요 표·연관어·성과 키워드)에 등장하더라도 후보로 내지 마라 — 코드가 기각해 그 자리가 통째로 버려진다. '아직 안 다룬 축'이 있으면 그 축에서 먼저 채워라.\n\n` +
     `[기존 콘텐츠 — 주제·키워드 유사 금지]\n${existingLines || '(없음)'}\n\n` +
     `[최근 제작 — 중복 회피]\n${done || '(없음)'}\n\n` +
     `[최근 자율주제 — 중복 회피]\n${recentAuto.slice(-5).join('\n') || '(없음)'}\n\n` +
@@ -649,7 +653,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
     // 요구하는 데다 로테이션·쿨다운·수요 블록이 계속 늘어 출력이 커졌다. 2000×3=6000 으로 5할 여유를 준다.
     // (haiku 는 --effort low 를 안 붙여 기본 effort 로 돌기 때문에 사고 토큰도 이 상한을 함께 쓴다.)
     const o = await microJSON<{ ideas?: unknown }>(
-      micro, IDEA_SYSTEM, rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 2000, signal },
+      micro, ideaSystem(), rejectNote ? `${baseUser}\n\n${rejectNote}` : baseUser, { maxOutputTokens: 2000, signal },
     ).catch((e: unknown) => { callError = e instanceof Error ? e.message : String(e); return null; });
     const cands = normalizeIdeaCandidates(o);
     if (!cands.length) {
@@ -731,12 +735,12 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         rejects.push(`"${title}"=시기 밖 소재(${offSeason.term}은 ${formatMonths(offSeason.months)} — 지금~다음 달 검색 소재만)`);
         continue;
       }
-      // 수종 월 상한 게이트(하드, 비용 0, 2026-08-27) — 최근 30일 같은 수종 블로그가 상한이면 어떤 각도든 기각.
+      // 소재 월 상한 게이트(하드, 비용 0, 2026-08-27) — 최근 30일 같은 소재 블로그가 상한이면 어떤 각도든 기각.
       // 유사 폴백보다 앞이라 '다른 시각' 우회도 막힌다(배롱 8편/월 실사고).
       const capped = overSpeciesCap(`${title} ${keyword ?? ''}`, speciesCov, getBrand()?.speciesCatalog, speciesCap);
       if (capped) {
-        console.log(`[auto-cycle] 아이디어 기각(수종 월 상한) — "${title}" (${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})`);
-        rejects.push(`"${title}"=수종 월 상한(${capped.name} 최근 30일 ${capped.count}편 — 아직 안 다룬 수종으로)`);
+        console.log(`[auto-cycle] 아이디어 기각(소재 월 상한) — "${title}" (${capped.name}: 30일 ${capped.count}편 ≥ ${SPECIES_MONTHLY_CAP})`);
+        rejects.push(`"${title}"=소재 월 상한(${capped.name} 최근 30일 ${capped.count}편 — 아직 안 다룬 소재로)`);
         continue;
       }
       // 주제 축 월 상한 게이트(하드, 비용 0, 2026-08-27) — 같은 축(심기·구매·거름·전정…)이 30일 상한이면 기각.
@@ -784,7 +788,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         ...(remembered ? { remembered: { line: remembered.line } } : {}),
       });
       // 기억은 '실측 결과'이지 '채택 자격'이 아니다 — 판정이 난 자리에서 바로 기록한다. 아래 게이트
-      // (계열 하드·수종 앵커·유사·소재 포화)에 먼저 걸려 continue 되는 후보도 실측은 이미 받았으므로,
+      // (계열 하드·소재 앵커·유사·범위 포화)에 먼저 걸려 continue 되는 후보도 실측은 이미 받았으므로,
       // 여기서 기록하지 않으면 다음 틱에 같은 키워드가 또 검색광고 조회를 태운다(이 태스크가 없애려던
       // 재조회 낭비가 마지막 라운드 경로에만 남던 비대칭). 실패는 함수 안에서 삼켜지는 fire-and-forget.
       if (shouldRememberDemandReject(demand, remembered, keyword)) rememberDemandReject(slug, keyword, demand.line);
@@ -795,19 +799,19 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         rejects.push(`"${title}"=검색 수요 미달(${demand.line})`);
         continue;
       }
-      // 계열 쿨다운 v2 게이트(하드만 기각, 2026-08-25) — 감쇠 점수 기반. 조합(수종×행위)은 엄격,
+      // 계열 쿨다운 v2 게이트(하드만 기각, 2026-08-25) — 감쇠 점수 기반. 조합(소재×행위)은 엄격,
       // 단독은 느슨, 소프트는 기각 없이 순서만 뒤로(위 정렬) — 포도 4편/6일·전정 6편/7일 실사고 계보.
       if (gate.level === 'hard') {
         console.log(`[auto-cycle] 아이디어 기각(계열 쿨다운 하드) — "${title}" (${gate.key}: ${gate.why})`);
         rejects.push(`"${title}"=계열 쿨다운(${gate.key} — 최근 집중, 다른 계열·조합으로)`);
         continue;
       }
-      // 수종 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):
-      // '나무 이름 유래' 총칭은 검색 0이고, 앵커 없는 꽃말·유래 주제는 화초 꽃말로 미끄러지는데 브랜드
-      // 소재 게이트가 못 막는다(장미·국화류는 금지 목록에 없음). '~나무' 수종 앵커를 코드로 강제한다.
+      // 소재 앵커 게이트(하드) — 이름·상징 유래 축(4순위, 2026-08-13 투입) 전용 함정 차단. 실측(08-01):
+      // 총칭만 담은 '이름 유래' 주제는 검색 0이고, 앵커 없는 꽃말·유래 주제는 브랜드 밖 소재로 미끄러지는데
+      // 소재 범위 게이트가 못 막는다(금지 목록에 없는 인접 소재). 브랜드가 앵커를 설정했으면 코드로 강제한다.
       if (lacksSpeciesAnchor(`${title} ${keyword ?? ''}`)) {
-        console.log(`[auto-cycle] 아이디어 기각(수종 앵커 없음) — "${title}"`);
-        rejects.push(`"${title}"=꽃말·유래 주제인데 수종명(○○나무) 앵커 없음`);
+        console.log(`[auto-cycle] 아이디어 기각(소재 앵커 없음) — "${title}"`);
+        rejects.push(`"${title}"=꽃말·유래 주제인데 소재명 앵커 없음`);
         continue;
       }
       const sim = findSimilarContent({ title, ...(keyword ? { keyword } : {}) }, existing);
@@ -835,7 +839,7 @@ export async function proposeContentIdeas(signal?: AbortSignal): Promise<Content
         }
       }
       // 비수기 후순위 — 판정은 위(리서치 폐기 다음)에서 났지만 **보관은 여기서** 한다. 위에서 바로
-      // 보관하면 수종 앵커·유사·소재 포화 게이트를 건너뛴 후보가 라운드 끝에 채택돼, 유사 폴백 자격을
+      // 보관하면 소재 앵커·유사·범위 포화 게이트를 건너뛴 후보가 라운드 끝에 채택돼, 유사 폴백 자격을
       // 계열 게이트 none 으로 좁혀 막았던 구멍이 두 번째 폴백 경로로 다시 열린다(위 유사 폴백 자격
       // 주석의 포도 4편 사고 계보). 로그는 항상, 보관은 자격(계열 none)일 때만 — 유사 폴백과 같은 규칙.
       if (demand.verdict === 'demote') {
@@ -952,7 +956,7 @@ const RESEARCH_SYSTEM =
   '- 미션은 "독자들이 실제로 궁금해하는 것(질문·고민)"과 "경쟁 콘텐츠(네이버 블로그·유튜브 상위)의 강점·빈틈"을 파악하는 조사다 — 글 제작이 아니다.\n' +
   '- [브랜드 컨텍스트]가 있으면 그 기업의 제품·타겟 고객 관심 영역을 우선하라. 시의성·계절성을 고려한다.\n' +
   '- [최근 리서치]와 중복되지 않게 하라 — 아직 조사되지 않은 영역을 고른다.\n' +
-  '- title 은 조사 대상을 담은 한국어 한 줄(예: "7월 장마철 텃밭 관리 — 독자 질문·경쟁 콘텐츠 분석").';
+  '- title 은 조사 대상을 담은 한국어 한 줄(예: "7월 성수기 준비 — 독자 질문·경쟁 콘텐츠 분석").';
 
 /** 지식 리서치 미션 1건 제안 — 브랜드 컨텍스트·시드 키워드에 그라운딩, 최근 리서치와 중복 회피.
  *  slug: 틱 시작 시점에 고정한 브랜드(researchDue/recordResearchLaunch 와 동일 상태 파일을 보게). */
